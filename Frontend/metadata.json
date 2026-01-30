@@ -1,0 +1,5 @@
+{
+  "name": "GourmetOS - Restaurant Management System",
+  "description": "A comprehensive restaurant management platform featuring role-based dashboards for Admins, Waiters, Kitchen Staff, and Cashiers. Includes menu management, live order tracking, billing, and inventory simulation.",
+  "requestFramePermissions": []
+}
