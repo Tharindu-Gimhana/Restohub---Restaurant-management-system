@@ -1,267 +1,209 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/db';
-import { OrderStatus } from '../types';
-import { ShoppingCart, Plus, Minus, Search, Trash2, CheckCircle, UtensilsCrossed } from 'lucide-react';
+import { PlusCircle, Clock, CheckCircle, Utensils } from 'lucide-react';
 
-const TABLES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
-
-const WaiterDashboard = ({ user, view = 'tables' }) => {
+const WaiterDashboard = ({ user }) => {
+  const [orders, setOrders] = useState([]);
   const [menu, setMenu] = useState([]);
-  const [selectedTable, setSelectedTable] = useState(null);
-  const [cart, setCart] = useState([]);
-  const [activeOrders, setActiveOrders] = useState([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState('Main');
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('orders'); // 'orders' or 'new'
+  
+  // New Order State
+  const [newOrder, setNewOrder] = useState({
+    tableNumber: '',
+    items: {} // { menuId: quantity }
+  });
 
+  // 1. Safe Data Loading
   useEffect(() => {
-    setMenu(db.getMenu());
-    setActiveOrders(db.getOrders().filter(o => o.waiterId === user.id));
-  }, [user.id]);
-
-  const addToCart = (item) => {
-    setCart(prev => {
-      const existing = prev.find(i => i.menuId === item.id);
-      if (existing) {
-        return prev.map(i => i.menuId === item.id ? { ...i, quantity: i.quantity + 1 } : i);
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        // Fetch Menu and Orders in parallel
+        const [menuData, ordersData] = await Promise.all([
+          db.getMenu(),
+          db.getOrders()
+        ]);
+        
+        setMenu(menuData);
+        // Ensure orders is an array before setting
+        setOrders(Array.isArray(ordersData) ? ordersData : []);
+      } catch (e) {
+        console.error("Error loading waiter data:", e);
+      } finally {
+        setLoading(false);
       }
-      return [...prev, { id: Date.now(), menuId: item.id, name: item.name, quantity: 1, price: item.price }];
-    });
-  };
-
-  const removeFromCart = (menuId) => {
-    setCart(prev => prev.filter(i => i.menuId !== menuId));
-  };
-
-  const updateQuantity = (menuId, delta) => {
-    setCart(prev => prev.map(i => {
-      if (i.menuId === menuId) {
-        const newQty = Math.max(1, i.quantity + delta);
-        return { ...i, quantity: newQty };
-      }
-      return i;
-    }));
-  };
-
-  const placeOrder = () => {
-    if (!selectedTable || cart.length === 0) return;
-    
-    const newOrder = {
-      id: db.getOrders().length + 1,
-      tableNumber: selectedTable,
-      status: OrderStatus.PENDING,
-      items: cart,
-      total: cart.reduce((sum, i) => sum + (i.price * i.quantity), 0),
-      createdAt: new Date().toISOString(),
-      waiterId: user.id
     };
+    loadData();
+  }, []);
 
-    db.saveOrder(newOrder);
-    setCart([]);
-    setSelectedTable(null);
-    setActiveOrders(prev => [...prev, newOrder]);
-    alert(`Order for Table ${selectedTable} placed!`);
+  // Calculate Total for New Order
+  const calculateTotal = () => {
+    return Object.entries(newOrder.items).reduce((total, [id, qty]) => {
+      const item = menu.find(m => m.id === parseInt(id));
+      return total + (item ? item.price * qty : 0);
+    }, 0);
   };
 
-  const getTableStatus = (tableNum) => {
-    const order = activeOrders.find(o => o.tableNumber === tableNum && o.status !== OrderStatus.PAID);
-    return order ? order.status : 'AVAILABLE';
+  const handlePlaceOrder = async () => {
+    if (!newOrder.tableNumber || Object.keys(newOrder.items).length === 0) return;
+
+    try {
+      const orderData = {
+        tableNumber: newOrder.tableNumber,
+        items: Object.entries(newOrder.items).map(([id, qty]) => ({
+          menuId: parseInt(id),
+          quantity: qty
+        })),
+        total: calculateTotal()
+      };
+
+      await db.saveOrder(orderData);
+      
+      // Reset Form & Refresh
+      setNewOrder({ tableNumber: '', items: {} });
+      setActiveTab('orders');
+      
+      // Refresh Orders List
+      const updatedOrders = await db.getOrders();
+      setOrders(updatedOrders);
+      
+      alert('Order placed successfully!');
+    } catch (e) {
+      alert('Failed to place order');
+    }
   };
 
-  if (view === 'orders') {
-    return (
-      <div className="space-y-6">
-        <h3 className="text-xl font-bold text-slate-800">My Active Orders</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {activeOrders.filter(o => o.status !== OrderStatus.PAID).map(order => (
-            <div key={order.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-              <div className="flex justify-between items-center mb-4">
-                <span className="text-lg font-bold">Table {order.tableNumber}</span>
-                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                  order.status === OrderStatus.PENDING ? 'bg-amber-100 text-amber-700' :
-                  order.status === OrderStatus.COOKING ? 'bg-blue-100 text-blue-700' :
-                  'bg-green-100 text-green-700'
-                }`}>
-                  {order.status}
-                </span>
-              </div>
-              <div className="space-y-2 mb-4 border-y border-slate-50 py-4">
-                {order.items.map((item, idx) => (
-                  <div key={idx} className="flex justify-between text-sm text-slate-600">
-                    <span>{item.quantity}x {item.name}</span>
-                    <span>${(item.price * item.quantity).toFixed(2)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500 text-xs">{new Date(order.createdAt).toLocaleTimeString()}</span>
-                <span className="font-bold text-indigo-600">${order.total.toFixed(2)}</span>
-              </div>
-            </div>
-          ))}
-          {activeOrders.filter(o => o.status !== OrderStatus.PAID).length === 0 && (
-            <div className="col-span-full py-20 text-center text-slate-400">
-              No active orders under your service.
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <div className="p-8 text-center">Loading Service Dashboard...</div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Table Selection & Menu */}
-      <div className="lg:col-span-2 space-y-8">
-        {!selectedTable ? (
-          <div className="space-y-4">
-            <h3 className="text-xl font-bold text-slate-800">Select a Table</h3>
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
-              {TABLES.map(table => {
-                const status = getTableStatus(table);
-                return (
-                  <button
-                    key={table}
-                    onClick={() => setSelectedTable(table)}
-                    className={`h-24 rounded-2xl flex flex-col items-center justify-center transition-all ${
-                      status === 'AVAILABLE' 
-                      ? 'bg-white border-2 border-slate-100 hover:border-indigo-600 text-slate-700 shadow-sm'
-                      : 'bg-indigo-50 border-2 border-indigo-200 text-indigo-700 cursor-not-allowed'
-                    }`}
-                  >
-                    <span className="text-xs uppercase font-bold opacity-60">Table</span>
-                    <span className="text-2xl font-black">{table}</span>
-                    <span className="text-[10px] mt-1 font-bold">{status}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <button onClick={() => setSelectedTable(null)} className="text-indigo-600 font-medium hover:underline flex items-center gap-1">
-                ← Back to Tables
-              </button>
-              <div className="bg-indigo-600 text-white px-4 py-1 rounded-full text-sm font-bold">
-                TABLE {selectedTable}
-              </div>
-            </div>
-
-            {/* Menu Tabs & Filter */}
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input 
-                  type="text" 
-                  placeholder="Search menu..." 
-                  className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                />
-              </div>
-              <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
-                {['Main', 'Starter', 'Dessert', 'Beverage'].map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                      activeTab === tab ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Menu Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {menu
-                .filter(item => item.category === activeTab && item.name.toLowerCase().includes(searchTerm.toLowerCase()))
-                .map(item => (
-                  <button
-                    key={item.id}
-                    onClick={() => addToCart(item)}
-                    disabled={item.stock === 0}
-                    className={`group bg-white p-4 rounded-2xl shadow-sm border border-slate-100 text-left hover:border-indigo-600 hover:shadow-md transition-all ${item.stock === 0 ? 'opacity-50' : ''}`}
-                  >
-                    <div className="aspect-square bg-slate-50 rounded-xl mb-3 flex items-center justify-center overflow-hidden">
-                      <UtensilsCrossed size={32} className="text-slate-200 group-hover:text-indigo-200 transition-colors" />
-                    </div>
-                    <p className="font-bold text-slate-800 leading-tight mb-1">{item.name}</p>
-                    <div className="flex justify-between items-center mt-auto">
-                      <span className="text-indigo-600 font-bold">${item.price.toFixed(2)}</span>
-                      <span className="text-[10px] text-slate-400 font-medium">Stock: {item.stock}</span>
-                    </div>
-                  </button>
-                ))}
-            </div>
-          </div>
-        )}
+    <div className="space-y-6">
+      {/* Tab Switcher */}
+      <div className="flex gap-4 border-b border-slate-200 pb-4">
+        <button 
+          onClick={() => setActiveTab('orders')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+            activeTab === 'orders' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Clock size={18} /> Active Orders
+        </button>
+        <button 
+          onClick={() => setActiveTab('new')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+            activeTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <PlusCircle size={18} /> New Order
+        </button>
       </div>
 
-      {/* Cart / Order Summary */}
-      <div className="bg-white rounded-3xl shadow-xl border border-slate-100 flex flex-col h-[calc(100vh-200px)] overflow-hidden">
-        <div className="p-6 border-b border-slate-50">
-          <div className="flex items-center gap-3 text-slate-800 font-bold text-lg">
-            <ShoppingCart className="text-indigo-600" />
-            <span>Current Order</span>
-            {selectedTable && <span className="ml-auto text-indigo-600">#Table {selectedTable}</span>}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {cart.length > 0 ? (
-            cart.map(item => (
-              <div key={item.menuId} className="flex justify-between items-center group">
-                <div className="flex-1">
-                  <p className="font-semibold text-slate-800">{item.name}</p>
-                  <p className="text-xs text-indigo-600 font-bold">${item.price.toFixed(2)} ea</p>
+      {/* VIEW 1: ACTIVE ORDERS */}
+      {activeTab === 'orders' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {orders.length === 0 ? (
+            <p className="text-slate-500 col-span-3 text-center py-8">No active orders found.</p>
+          ) : (
+            orders.map(order => (
+              <div key={order.id} className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <h3 className="font-bold text-lg text-slate-800">Table {order.table_number}</h3>
+                    <span className="text-xs text-slate-500">#{order.id} • {new Date(order.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                  </div>
+                  <span className={`px-2 py-1 rounded text-xs font-bold ${
+                    order.status === 'READY' ? 'bg-green-100 text-green-700' : 
+                    order.status === 'PENDING' ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-100'
+                  }`}>
+                    {order.status}
+                  </span>
                 </div>
-                <div className="flex items-center gap-3 bg-slate-50 p-1.5 rounded-xl">
-                  <button onClick={() => updateQuantity(item.menuId, -1)} className="w-6 h-6 flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-colors"><Minus size={14} /></button>
-                  <span className="text-sm font-bold w-4 text-center">{item.quantity}</span>
-                  <button onClick={() => updateQuantity(item.menuId, 1)} className="w-6 h-6 flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-colors"><Plus size={14} /></button>
+                
+                {/* Note: Items might not be in the simple order fetch, so we just show total */}
+                <div className="mt-4 pt-4 border-t border-slate-50 flex justify-between items-center">
+                  <span className="text-slate-600 font-medium">Total Bill</span>
+                  <span className="text-lg font-bold text-slate-800">${Number(order.total).toFixed(2)}</span>
                 </div>
-                <button onClick={() => removeFromCart(item.menuId)} className="ml-3 p-1.5 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><Trash2 size={16} /></button>
               </div>
             ))
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center text-center py-20 opacity-40">
-              <ShoppingCart size={48} className="mb-4" />
-              <p>Your cart is empty.<br/>Add items to get started.</p>
-            </div>
           )}
         </div>
+      )}
 
-        <div className="p-6 bg-slate-50 space-y-4">
-          <div className="flex justify-between text-slate-500">
-            <span>Subtotal</span>
-            <span>${cart.reduce((s, i) => s + (i.price * i.quantity), 0).toFixed(2)}</span>
+      {/* VIEW 2: NEW ORDER FORM */}
+      {activeTab === 'new' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Menu Selection */}
+          <div className="md:col-span-2 space-y-4">
+            <h3 className="font-bold text-slate-700">Select Items</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {menu.map(item => (
+                <div 
+                  key={item.id} 
+                  onClick={() => setNewOrder(prev => ({
+                    ...prev,
+                    items: { ...prev.items, [item.id]: (prev.items[item.id] || 0) + 1 }
+                  }))}
+                  className="bg-white p-4 rounded-lg border border-slate-200 cursor-pointer hover:border-indigo-500 hover:shadow-md transition-all flex justify-between items-center"
+                >
+                  <div>
+                    <p className="font-medium text-slate-800">{item.name}</p>
+                    <p className="text-sm text-slate-500">${item.price}</p>
+                  </div>
+                  <PlusCircle size={20} className="text-indigo-400" />
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="flex justify-between text-slate-500">
-            <span>Tax (10%)</span>
-            <span>${(cart.reduce((s, i) => s + (i.price * i.quantity), 0) * 0.1).toFixed(2)}</span>
+
+          {/* Order Summary */}
+          <div className="bg-white p-6 rounded-xl shadow-lg border border-indigo-100 h-fit">
+            <h3 className="font-bold text-lg text-slate-800 mb-4">Current Order</h3>
+            
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Table Number</label>
+              <input 
+                type="text" 
+                className="w-full border-b-2 border-slate-200 focus:border-indigo-500 outline-none py-1 text-lg font-bold bg-transparent"
+                placeholder="Enter Table #"
+                value={newOrder.tableNumber}
+                onChange={e => setNewOrder({...newOrder, tableNumber: e.target.value})}
+              />
+            </div>
+
+            <div className="space-y-2 mb-6 max-h-60 overflow-y-auto">
+              {Object.entries(newOrder.items).map(([id, qty]) => {
+                const item = menu.find(m => m.id === parseInt(id));
+                if (!item) return null;
+                return (
+                  <div key={id} className="flex justify-between text-sm">
+                    <span>{item.name} <span className="text-slate-400">x{qty}</span></span>
+                    <span className="font-medium">${(item.price * qty).toFixed(2)}</span>
+                  </div>
+                );
+              })}
+              {Object.keys(newOrder.items).length === 0 && (
+                <p className="text-slate-400 text-sm italic text-center py-4">No items selected</p>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mb-6">
+              <div className="flex justify-between items-center text-xl font-bold text-slate-800">
+                <span>Total</span>
+                <span>${calculateTotal().toFixed(2)}</span>
+              </div>
+            </div>
+
+            <button 
+              onClick={handlePlaceOrder}
+              disabled={!newOrder.tableNumber || Object.keys(newOrder.items).length === 0}
+              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+            >
+              Send to Kitchen
+            </button>
           </div>
-          <div className="flex justify-between text-lg font-black text-slate-900 border-t border-slate-200 pt-4">
-            <span>Total</span>
-            <span>${(cart.reduce((s, i) => s + (i.price * i.quantity), 0) * 1.1).toFixed(2)}</span>
-          </div>
-          
-          <button 
-            disabled={cart.length === 0 || !selectedTable}
-            onClick={placeOrder}
-            className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all ${
-              cart.length > 0 && selectedTable 
-              ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100' 
-              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-            }`}
-          >
-            <CheckCircle size={20} />
-            Confirm & Send to Kitchen
-          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };

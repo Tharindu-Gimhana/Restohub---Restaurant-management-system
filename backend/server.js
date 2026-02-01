@@ -1,212 +1,189 @@
-
-/**
- * BACKEND IMPLEMENTATION - REST API
- * (This code represents the backend/server.js file requested)
- */
-
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 const cors = require('cors');
-require('dotenv').config();
+const jwt = require('jsonwebtoken');
 
 const app = express();
-app.use(express.json());
-app.use(cors());
 
-// Database Configuration
+// --- MIDDLEWARE ---
+app.use(cors());
+app.use(express.json());
+
+// --- CONFIGURATION ---
+const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_key'; // Safety fallback
+const PORT = process.env.PORT || 5000;
+
+// --- DATABASE CONNECTION ---
 const db = mysql.createConnection({
-    host: process.env.DB_HOST ,
-    user: process.env.DB_USER ,
-    password: process.env.DB_PASSWORD ,
-    database: process.env.DB_NAME 
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '', // Add your DB password if you have one
+    database: process.env.DB_NAME || 'restaurant_db'
 });
 
 db.connect((err) => {
-    if (err) throw err;
+    if (err) {
+        console.error('Database connection failed:', err.stack);
+        return;
+    }
     console.log('Connected to MySQL Database');
 });
 
-// Authentication Middleware
+// --- AUTH MIDDLEWARE (Protect Routes) ---
 const authenticateToken = (req, res, next) => {
-    console.log('backend connected to front end succefully');
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
+
     if (!token) return res.sendStatus(401);
 
-    jwt.verify(token, process.env.JWT_SECRET , (err, user) => {
+    jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.sendStatus(403);
         req.user = user;
         next();
     });
 };
 
-// Login Route
+// ==========================================
+//                 ROUTES
+// ==========================================
+
+// 1. LOGIN (Fixes the 500 Error)
 app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
-    db.query('SELECT * FROM users WHERE username = ?', [username], (err, results) => {
-        if (err) return res.status(500).json(err);
-        if (results.length === 0) return res.status(404).json({ message: 'User not found' });
+
+    // We select role_name so the frontend knows who logged in
+    const query = `
+        SELECT u.*, r.role_name 
+        FROM users u 
+        JOIN roles r ON u.role_id = r.id 
+        WHERE u.username = ? AND u.password = ?
+    `;
+
+    db.query(query, [username, password], (err, results) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ message: "Database error" });
+        }
+
+        if (results.length === 0) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
 
         const user = results[0];
-        // In real production, use bcrypt.compare
-        if (password === user.password) {
-            const token = jwt.sign({ id: user.id, role: user.role },process.env.JWT_SECRET, { expiresIn: '1h' });
-            res.json({ token, user: { id: user.id, username: user.username, role: user.role, name: user.name } });
-        } else {
-            res.status(401).json({ message: 'Invalid password' });
-        }
-    });
-});
+        
+        // Create Token
+        const token = jwt.sign(
+            { id: user.id, role: user.role_name, restaurantId: user.restaurant_id },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
 
-// Menu Routes
-app.get('/api/menu', (req, res) => {
-    db.query('SELECT * FROM menu', (err, results) => {
-        if (err) return res.status(500).json(err);
-        res.json(results);
-    });
-});
-
-app.post('/api/menu', authenticateToken, (req, res) => {
-    if (req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Forbidden' });
-    const { name, category, price, stock } = req.body;
-    db.query('INSERT INTO menu (name, category, price, stock) VALUES (?, ?, ?, ?)', [name, category, price, stock], (err, result) => {
-        if (err) return res.status(500).json(err);
-        res.status(201).json({ id: result.insertId, name, category, price, stock });
-    });
-});
-
-// Order Routes
-app.post('/api/orders', authenticateToken, (req, res) => {
-    const { tableNumber, items, total } = req.body;
-    db.beginTransaction(err => {
-        if (err) throw err;
-        db.query('INSERT INTO orders (table_number, status, total, waiter_id) VALUES (?, ?, ?, ?)', 
-        [tableNumber, 'PENDING', total, req.user.id], (err, result) => {
-            if (err) return db.rollback(() => res.status(500).json(err));
-            
-            const orderId = result.insertId;
-            const values = items.map(i => [orderId, i.menuId, i.quantity, i.price]);
-            
-            db.query('INSERT INTO order_items (order_id, menu_id, quantity, price) VALUES ?', [values], (err) => {
-                if (err) return db.rollback(() => res.status(500).json(err));
-                db.commit(err => {
-                    if (err) return db.rollback(() => res.status(500).json(err));
-                    res.status(201).json({ orderId });
-                });
-            });
+        res.json({
+            token,
+            user: {
+                id: user.id,
+                name: user.name,
+                username: user.username,
+                role: user.role_name, // e.g., 'ADMIN'
+                restaurant_id: user.restaurant_id
+            }
         });
     });
 });
 
-app.patch('/api/orders/:id/status', authenticateToken, (req, res) => {
-    const { status } = req.body;
-    db.query('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id], (err) => {
-        if (err) return res.status(500).json(err);
-        res.json({ message: 'Status updated' });
-    });
-});
-
-
-// --- GET ORDERS (Simplified) ---
-app.get('/api/orders', authenticateToken, (req, res) => {
-    const restaurantId = req.user.restaurantId || 1; // Fallback for safety
-
-    // Simple query: Get orders first
-    const query = `
-        SELECT o.id, o.table_number, o.status, o.total, o.created_at, 
-               u.name as waiter_name
-        FROM orders o
-        LEFT JOIN users u ON o.waiter_id = u.id
-        WHERE o.restaurant_id = ?
-        ORDER BY o.created_at DESC
-    `;
-
-    db.query(query, [restaurantId], (err, results) => {
-        if (err) {
-            console.error("Order Fetch Error:", err);
-            return res.status(500).json(err);
-        }
-        res.json(results);
-    });
-});
-
-// --- AUTH ROUTES ---
-
-// 1. Owner Registration (Sign Up)
+// 2. OWNER REGISTRATION
 app.post('/api/auth/register', (req, res) => {
     const { restaurantName, username, email, password } = req.body;
 
-    // We use a Transaction because we must create a Restaurant AND a User.
-    // If one fails, we must cancel both.
     db.beginTransaction(err => {
         if (err) return res.status(500).json(err);
 
-        // Step 1: Create the Restaurant
-        const sqlRestaurant = 'INSERT INTO restaurants (name, email) VALUES (?, ?)';
-        db.query(sqlRestaurant, [restaurantName, email], (err, result) => {
-            if (err) {
-                return db.rollback(() => res.status(500).json({ message: 'Error creating restaurant', error: err }));
-            }
+        // Create Restaurant
+        db.query('INSERT INTO restaurants (name, email) VALUES (?, ?)', 
+        [restaurantName, email], (err, result) => {
+            if (err) return db.rollback(() => res.status(500).json(err));
 
             const restaurantId = result.insertId;
 
-            // Step 2: Create the Admin User for this Restaurant
-            // Note: We hardcode role_id = 1 (ADMIN) for the person signing up
-            const sqlUser = 'INSERT INTO users (restaurant_id, username, password, name, role_id) VALUES (?, ?, ?, ?, ?)';
-            db.query(sqlUser, [restaurantId, username, password, 'Owner', 1], (err, result) => {
-                if (err) {
-                    return db.rollback(() => res.status(500).json({ message: 'Error creating admin user', error: err }));
-                }
+            // Create Admin User (Role ID 1 = ADMIN)
+            db.query('INSERT INTO users (restaurant_id, username, password, name, role_id) VALUES (?, ?, ?, ?, ?)',
+            [restaurantId, username, password, 'Owner', 1], (err, result) => {
+                if (err) return db.rollback(() => res.status(500).json(err));
 
-                // Step 3: Commit (Save) everything
                 db.commit(err => {
-                    if (err) {
-                        return db.rollback(() => res.status(500).json(err));
-                    }
-                    res.status(201).json({ message: 'Restaurant registered successfully!' });
+                    if (err) return db.rollback(() => res.status(500).json(err));
+                    res.status(201).json({ message: 'Restaurant Registered!' });
                 });
             });
         });
     });
 });
 
-//New feature added.
+// 3. GET MENU (Public or Private)
+app.get('/api/menu', (req, res) => {
+    // If you want to filter by restaurant, you might need to pass a query param or use the token
+    // For now, let's assume we fetch all items (or you can add ?restaurant_id=1)
+    const sql = 'SELECT * FROM menu';
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json(err);
+        res.json(results);
+    });
+});
 
-// ... existing code ...
-
-// --- STAFF MANAGEMENT ---
-// Only an Admin can add staff. The staff is automatically linked to the Admin's restaurant.
+// 4. ADD STAFF (Fixes the Staff Management Page)
 app.post('/api/staff', authenticateToken, (req, res) => {
     const { name, username, password, role_id } = req.body;
-    const restaurantId = req.user.restaurantId; // Get from the Admin's token
+    const restaurantId = req.user.restaurantId;
 
-    // Simple validation
     if (!name || !username || !password || !role_id) {
         return res.status(400).json({ message: "All fields are required" });
     }
 
     const query = 'INSERT INTO users (restaurant_id, username, password, name, role_id) VALUES (?, ?, ?, ?, ?)';
-    
     db.query(query, [restaurantId, username, password, name, role_id], (err, result) => {
         if (err) {
-            // Handle duplicate username error
-            if (err.code === 'ER_DUP_ENTRY') {
-                return res.status(400).json({ message: "Username already taken" });
-            }
-            return res.status(500).json(err);
+            console.error(err);
+            return res.status(500).json({ message: "Error creating staff" });
         }
-        res.status(201).json({ message: "Staff member created successfully" });
+        res.status(201).json({ message: "Staff created" });
     });
 });
 
-// --- REPORTS & ANALYTICS ---
+// 5. GET ORDERS (Updated to include Items List for Kitchen)
+app.get('/api/orders', authenticateToken, (req, res) => {
+    const restaurantId = req.user.restaurantId;
+    
+    // This query groups items into a JSON list so the frontend can display them
+    const query = `
+        SELECT o.id, o.table_number, o.status, o.total, o.created_at, 
+        JSON_ARRAYAGG(
+            JSON_OBJECT('name', m.name, 'quantity', oi.quantity)
+        ) as items
+        FROM orders o 
+        JOIN order_items oi ON o.id = oi.order_id 
+        JOIN menu m ON oi.menu_id = m.id
+        WHERE o.restaurant_id = ?
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+    `;
+
+    db.query(query, [restaurantId], (err, results) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json(err);
+        }
+        res.json(results);
+    });
+});
+// 6. REPORTS (Fixes the 404 Error)
 app.get('/api/reports', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
 
-    // We run 3 parallel queries to get the stats
+    // Query 1: Total Revenue & Count
     const incomeQuery = "SELECT SUM(total) as total_revenue, COUNT(*) as total_orders FROM orders WHERE restaurant_id = ? AND status = 'PAID'";
+    
+    // Query 2: Top Selling Items
     const popularQuery = `
         SELECT m.name, SUM(oi.quantity) as sold 
         FROM order_items oi 
@@ -218,22 +195,27 @@ app.get('/api/reports', authenticateToken, (req, res) => {
     `;
 
     db.query(incomeQuery, [restaurantId], (err, incomeResults) => {
-        if (err) return res.status(500).json(err);
+        if (err) {
+            console.error(err);
+            return res.status(500).json(err);
+        }
         
         db.query(popularQuery, [restaurantId], (err, popularResults) => {
-            if (err) return res.status(500).json(err);
+            if (err) {
+                console.error(err);
+                return res.status(500).json(err);
+            }
 
             res.json({
                 revenue: incomeResults[0].total_revenue || 0,
                 totalOrders: incomeResults[0].total_orders || 0,
-                topItems: popularResults
+                topItems: popularResults || []
             });
         });
     });
 });
 
-
-
-// Start Server
-const PORT = 5000;
-app.listen(PORT, () => console.log(`Backend running on http://localhost:${PORT}`));
+// --- START SERVER ---
+app.listen(PORT, () => {
+    console.log(`Backend running on http://localhost:${PORT}`);
+});

@@ -130,15 +130,8 @@ export const db = {
             console.error(e);
             return { totalRevenue: 0, totalOrders: 0, recentOrders: [] };
         }
-    }
-};
+    },
 
-
-
-
-// ... existing code ...
-export const db = {
-    // ... existing login, registerOwner, getMenu, getOrders ...
 
     // --- STAFF ---
     addStaff: async (staffData) => {
@@ -163,3 +156,10 @@ export const db = {
         return await response.json();
     }
 };
+
+
+
+
+
+
+    
