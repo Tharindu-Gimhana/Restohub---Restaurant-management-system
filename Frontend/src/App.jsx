@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Signup from './pages/Signup';
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -38,7 +39,11 @@ const App = () => {
           path="/dashboard/*" 
           element={user ? <Dashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" />} 
         />
+
+        <Route path="/signup" element={<Signup />} />
         <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
+
+        
       </Routes>
     </HashRouter>
   );

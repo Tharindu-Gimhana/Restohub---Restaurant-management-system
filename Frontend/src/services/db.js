@@ -1,80 +1,165 @@
-import { UserRole, OrderStatus } from '../types';
+/**
+ * API SERVICE LAYER
+ * Handles all communication with the Backend (Port 5000)
+ */
 
-const INITIAL_MENU = [
-  { id: 1, name: 'Margherita Pizza', category: 'Main', price: 12.99, stock: 50 },
-  { id: 2, name: 'Truffle Pasta', category: 'Main', price: 18.50, stock: 30 },
-  { id: 3, name: 'Caesar Salad', category: 'Starter', price: 9.99, stock: 40 },
-  { id: 4, name: 'Chocolate Lava Cake', category: 'Dessert', price: 7.50, stock: 20 },
-  { id: 5, name: 'Iced Latte', category: 'Beverage', price: 4.50, stock: 100 },
-];
+const BASE_URL = 'http://localhost:5000/api';
 
-const INITIAL_USERS = [
-  { id: 1, username: 'admin', role: UserRole.ADMIN, name: 'Alex Manager' },
-  { id: 2, username: 'waiter1', role: UserRole.WAITER, name: 'Sam Waiter' },
-  { id: 3, username: 'chef1', role: UserRole.KITCHEN, name: 'Chef Gordon' },
-  { id: 4, username: 'cashier1', role: UserRole.CASHIER, name: 'Janice Cashier' },
-];
+// Helper to retrieve the JWT token from Local Storage
+const getToken = () => localStorage.getItem('rms_token');
 
-class Database {
-  getStorage(key, defaultValue) {
-    const data = localStorage.getItem(`rms_${key}`);
-    return data ? JSON.parse(data) : defaultValue;
-  }
-
-  setStorage(key, value) {
-    localStorage.setItem(`rms_${key}`, JSON.stringify(value));
-  }
-
-  getUsers() { 
-    return INITIAL_USERS; 
-  }
-
-  getMenu() {
-    return this.getStorage('menu', INITIAL_MENU);
-  }
-
-  updateMenu(items) {
-    this.setStorage('menu', items);
-  }
-
-  getOrders() {
-    return this.getStorage('orders', []);
-  }
-
-  saveOrder(order) {
-    const orders = this.getOrders();
-    orders.push(order);
-    this.setStorage('orders', orders);
-  }
-
-  updateOrderStatus(orderId, status) {
-    const orders = this.getOrders();
-    const index = orders.findIndex(o => o.id === orderId);
-    if (index !== -1) {
-      orders[index].status = status;
-      
-      // Inventory deduction logic if paid
-      if (status === OrderStatus.PAID) {
-        const menu = this.getMenu();
-        orders[index].items.forEach(item => {
-          const menuItem = menu.find(m => m.id === item.menuId);
-          if (menuItem) menuItem.stock -= item.quantity;
-        });
-        this.updateMenu(menu);
-      }
-      
-      this.setStorage('orders', orders);
-    }
-  }
-
-  getSalesData() {
-    const orders = this.getOrders().filter(o => o.status === OrderStatus.PAID);
+// Helper to get headers with the Token attached
+const getHeaders = () => {
+    const token = getToken();
     return {
-      totalRevenue: orders.reduce((sum, o) => sum + o.total, 0),
-      totalOrders: orders.length,
-      recentOrders: orders.slice(-5).reverse()
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
     };
-  }
-}
+};
 
-export const db = new Database();
+export const db = {
+    // --- AUTHENTICATION ---
+
+    // 1. Login (Staff & Admin)
+    login: async (username, password) => {
+        const response = await fetch(`${BASE_URL}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || 'Login failed');
+        }
+
+        return await response.json(); // Returns { token, user }
+    },
+
+    // 2. Owner Registration (New)
+    registerOwner: async (data) => {
+        // Expected data: { restaurantName, username, email, password }
+        const response = await fetch(`${BASE_URL}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.message || 'Registration failed');
+        }
+
+        return await response.json();
+    },
+
+    // 3. Logout
+    logout: () => {
+        localStorage.removeItem('rms_token');
+        localStorage.removeItem('rms_user');
+    },
+
+    // --- MENU MANAGEMENT ---
+
+    getMenu: async () => {
+        // Fetches menu for the logged-in user's restaurant
+        // (Backend handles the filtering based on the Token)
+        const response = await fetch(`${BASE_URL}/menu`, {
+            headers: getHeaders() // Include token to identify restaurant
+        });
+        if (!response.ok) throw new Error('Failed to fetch menu');
+        return await response.json();
+    },
+
+    addMenuItem: async (item) => {
+        const response = await fetch(`${BASE_URL}/menu`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(item),
+        });
+        if (!response.ok) throw new Error('Failed to add item');
+        return await response.json();
+    },
+
+    // --- ORDER MANAGEMENT ---
+
+    getOrders: async () => {
+        const response = await fetch(`${BASE_URL}/orders`, {
+            headers: getHeaders()
+        });
+        if (!response.ok) return []; 
+        return await response.json();
+    },
+
+    saveOrder: async (orderData) => {
+        // Expects: { tableNumber: '5', items: [...], total: 50.00 }
+        const response = await fetch(`${BASE_URL}/orders`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(orderData),
+        });
+        if (!response.ok) throw new Error('Failed to place order');
+        return await response.json();
+    },
+
+    updateOrderStatus: async (orderId, status) => {
+        const response = await fetch(`${BASE_URL}/orders/${orderId}/status`, {
+            method: 'PATCH',
+            headers: getHeaders(),
+            body: JSON.stringify({ status }),
+        });
+        if (!response.ok) throw new Error('Failed to update status');
+        return await response.json();
+    },
+
+    // --- REPORTING (Calculated on Client for now) ---
+    getSalesData: async () => {
+        try {
+            const response = await fetch(`${BASE_URL}/orders`, { headers: getHeaders() });
+            if (!response.ok) return { totalRevenue: 0, totalOrders: 0, recentOrders: [] };
+            
+            const orders = await response.json();
+            const paidOrders = orders.filter(o => o.status === 'PAID');
+            
+            return {
+                totalRevenue: paidOrders.reduce((sum, o) => sum + Number(o.total), 0),
+                totalOrders: paidOrders.length,
+                recentOrders: paidOrders.slice(-5).reverse()
+            };
+        } catch (e) {
+            console.error(e);
+            return { totalRevenue: 0, totalOrders: 0, recentOrders: [] };
+        }
+    }
+};
+
+
+
+
+// ... existing code ...
+export const db = {
+    // ... existing login, registerOwner, getMenu, getOrders ...
+
+    // --- STAFF ---
+    addStaff: async (staffData) => {
+        const response = await fetch(`${BASE_URL}/staff`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(staffData),
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.message || 'Failed to add staff');
+        }
+        return await response.json();
+    },
+
+    // --- REPORTS ---
+    getReports: async () => {
+        const response = await fetch(`${BASE_URL}/reports`, {
+            headers: getHeaders()
+        });
+        if (!response.ok) throw new Error('Failed to fetch reports');
+        return await response.json();
+    }
+};
