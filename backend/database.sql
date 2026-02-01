@@ -63,6 +63,7 @@ CREATE TABLE orders (
     table_number VARCHAR(10) NOT NULL,
     status ENUM('PENDING', 'COOKING', 'READY', 'PAID', 'CANCELLED') DEFAULT 'PENDING',
     total DECIMAL(10, 2) NOT NULL,
+    items TEXT,
     waiter_id INT, -- The staff member who placed the order
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE CASCADE,

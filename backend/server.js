@@ -150,21 +150,19 @@ app.post('/api/staff', authenticateToken, (req, res) => {
     });
 });
 
-// 5. GET ORDERS (Updated to include Items List for Kitchen)
+// 5. GET ORDERS (Compatible with ALL MySQL versions)
 app.get('/api/orders', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
     
-    // This query groups items into a JSON list so the frontend can display them
+    // Step 1: Get the "Flat" data. 
+    // This returns multiple rows for the same order if it has multiple items.
     const query = `
         SELECT o.id, o.table_number, o.status, o.total, o.created_at, 
-        JSON_ARRAYAGG(
-            JSON_OBJECT('name', m.name, 'quantity', oi.quantity)
-        ) as items
+               m.name as menu_name, oi.quantity
         FROM orders o 
-        JOIN order_items oi ON o.id = oi.order_id 
-        JOIN menu m ON oi.menu_id = m.id
+        LEFT JOIN order_items oi ON o.id = oi.order_id 
+        LEFT JOIN menu m ON oi.menu_id = m.id
         WHERE o.restaurant_id = ?
-        GROUP BY o.id
         ORDER BY o.created_at DESC
     `;
 
@@ -173,9 +171,43 @@ app.get('/api/orders', authenticateToken, (req, res) => {
             console.error(err);
             return res.status(500).json(err);
         }
-        res.json(results);
+
+        // Step 2: Group the data manually in JavaScript
+        // We use a Map to merge duplicates into a single order with an 'items' list
+        const ordersMap = new Map();
+
+        results.forEach(row => {
+            if (!ordersMap.has(row.id)) {
+                // If this is the first time we see this Order ID, create the order object
+                ordersMap.set(row.id, {
+                    id: row.id,
+                    table_number: row.table_number,
+                    status: row.status,
+                    total: row.total,
+                    created_at: row.created_at,
+                    items: [] // Initialize empty list
+                });
+            }
+
+            // If this row has a menu item, add it to the list
+            if (row.menu_name) {
+                ordersMap.get(row.id).items.push({
+                    name: row.menu_name,
+                    quantity: row.quantity
+                });
+            }
+        });
+
+        // Step 3: Convert the Map back to a clean Array
+        const finalOrders = Array.from(ordersMap.values());
+
+        res.json(finalOrders);
     });
 });
+
+
+
+
 // 6. REPORTS (Fixes the 404 Error)
 app.get('/api/reports', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
@@ -215,6 +247,42 @@ app.get('/api/reports', authenticateToken, (req, res) => {
     });
 });
 
+
+
+// Note: We added 'authenticateToken' as the second argument here
+app.post('/api/orders', authenticateToken, (req, res) => {
+    
+    // 1. Extract waiterId automatically from the token (secure!)
+    const waiterId = req.user.id; 
+    // Note: If your token payload calls it 'userId', use req.user.userId instead.
+
+    const { tableNumber, items, total, restaurantId } = req.body;
+    const finalRestaurantId = restaurantId || 1; 
+
+    // 2. The SQL remains the same
+    const sql = `
+        INSERT INTO orders 
+        (restaurant_id, waiter_id, table_number, items, total, status, created_at) 
+        VALUES (?, ?, ?, ?, ?, ?, NOW())
+    `;
+
+    const itemsString = JSON.stringify(items);
+    const status = 'pending';
+
+    // 3. Execute
+    db.query(sql, [finalRestaurantId, waiterId, tableNumber, itemsString, total, status], (err, result) => {
+        if (err) {
+            console.error("Error inserting order:", err);
+            return res.status(500).json({ message: "Database error", error: err.message });
+        }
+
+        res.status(201).json({ 
+            message: "Order placed successfully", 
+            orderId: result.insertId,
+            waiterId: waiterId // Optional: Send back to confirm
+        });
+    });
+});
 // --- START SERVER ---
 app.listen(PORT, () => {
     console.log(`Backend running on http://localhost:${PORT}`);
