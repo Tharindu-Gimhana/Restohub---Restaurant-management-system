@@ -16,6 +16,7 @@ import Reports from '../components/Reports';
 import WaiterDashboard from '../components/WaiterDashboard';
 import KitchenDashboard from '../components/KitchenDashboard';
 import CashierDashboard from '../components/CashierDashboard';
+import MenuManagement from '../components/MenuManagement';
 
 const Dashboard = ({ user, onLogout }) => {
   const location = useLocation();
@@ -26,6 +27,7 @@ const Dashboard = ({ user, onLogout }) => {
     { label: 'Overview', path: '/dashboard', icon: LayoutDashboard },
     { label: 'Staff Management', path: '/dashboard/staff', icon: Users },
     { label: 'Reports & Analytics', path: '/dashboard/reports', icon: TrendingUp },
+    { label: 'Menu Management', path: '/dashboard/menu', icon: UtensilsCrossed },
     // You can add Menu management back here if needed
   ];
 
@@ -74,7 +76,7 @@ const Dashboard = ({ user, onLogout }) => {
               </div>
               <div className="overflow-hidden">
                 <p className="text-sm font-bold text-white truncate">{user.name}</p>
-                <p className="text-xs text-slate-400">Rest. ID: #{user.restaurant_id}</p>
+                <p className="text-xs text-slate-400">Rest. ID: #{user.restaurantId}</p>
               </div>
             </div>
           </div>
@@ -103,6 +105,7 @@ const Dashboard = ({ user, onLogout }) => {
               <Route path="/" element={<AdminOverview user={user} />} />
               <Route path="/staff" element={<StaffManagement />} />
               <Route path="/reports" element={<Reports />} />
+              <Route path="/menu" element={<MenuManagement />} /> {/* <--- Added Route */}
             </>
           )}
 

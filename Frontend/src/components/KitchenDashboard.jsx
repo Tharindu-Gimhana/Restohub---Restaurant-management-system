@@ -6,41 +6,58 @@ const KitchenDashboard = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Fetch Orders Async
-  const fetchOrders = async () => {
+  // --- UPDATED: Fetch Orders AND Menu ---
+  const fetchData = async () => {
     try {
-      const data = await db.getOrders();
-      
-      // Filter only active orders (Pending, Cooking, Ready)
-      // And ensure 'items' is parsed correctly (sometimes DB sends it as a string)
-      const activeOrders = data
+      // 1. Get both Orders and Menu at the same time
+      const [menuData, ordersData] = await Promise.all([
+        db.getMenu(),
+        db.getOrders()
+      ]);
+
+      // 2. Filter Active Orders
+      const activeOrders = ordersData
         .filter(o => ['PENDING', 'COOKING', 'READY'].includes(o.status))
-        .map(order => ({
-          ...order,
-          // Safety check: if items is a string (JSON), parse it. If it's missing, use empty array.
-          items: typeof order.items === 'string' ? JSON.parse(order.items) : (order.items || [])
-        }));
+        .map(order => {
+          // A. Parse the JSON string from DB
+          let rawItems = [];
+          try {
+            rawItems = typeof order.items === 'string' ? JSON.parse(order.items) : (order.items || []);
+          } catch (e) {
+            console.error("JSON Parse error for order:", order.id);
+          }
+
+          // B. "Hydrate" items: Find the name using the menuId
+          const itemsWithNames = rawItems.map(item => {
+            const menuDetail = menuData.find(m => m.id === item.menuId);
+            return {
+              ...item,
+              name: menuDetail ? menuDetail.name : 'Unknown Item' // <--- THE FIX
+            };
+          });
+
+          return { ...order, items: itemsWithNames };
+        });
 
       setOrders(activeOrders);
     } catch (error) {
-      console.error("Error loading kitchen orders:", error);
+      console.error("Error loading kitchen data:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Initial Load & Auto-Refresh
   useEffect(() => {
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 5000); // Check every 5 seconds
+    fetchData(); // Initial Load
+    const interval = setInterval(fetchData, 5000); // Auto-refresh
     return () => clearInterval(interval);
   }, []);
 
-  // 3. Update Status Async
+  // --- Update Status Helper ---
   const updateStatus = async (orderId, nextStatus) => {
     try {
       await db.updateOrderStatus(orderId, nextStatus);
-      fetchOrders(); // Refresh immediately
+      fetchData(); // Refresh data immediately after update
     } catch (error) {
       alert("Failed to update order status");
     }
@@ -52,7 +69,7 @@ const KitchenDashboard = () => {
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold text-slate-800">Kitchen Display System</h2>
-        <button onClick={fetchOrders} className="bg-white p-2 rounded-full shadow-sm hover:bg-slate-100">
+        <button onClick={fetchData} className="bg-white p-2 rounded-full shadow-sm hover:bg-slate-100">
             <RefreshCw size={20} className="text-slate-500" />
         </button>
       </div>
@@ -82,13 +99,14 @@ const KitchenDashboard = () => {
                     order.items.map((item, i) => (
                       <li key={i} className="flex justify-between items-center">
                         <span className="text-slate-700 font-medium">
+                          {/* We display Quantity and Name here */}
                           <span className="inline-block w-8 text-indigo-600 font-bold">{item.quantity}x</span>
-                          {item.name}
+                          {item.name} 
                         </span>
                       </li>
                     ))
                   ) : (
-                    <li className="text-sm text-slate-400 italic">No items details (Check Backend)</li>
+                    <li className="text-sm text-slate-400 italic">No items details</li>
                   )}
                 </ul>
               </div>

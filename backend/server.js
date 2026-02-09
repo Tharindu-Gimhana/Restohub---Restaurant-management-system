@@ -86,7 +86,7 @@ app.post('/api/auth/login', (req, res) => {
                 name: user.name,
                 username: user.username,
                 role: user.role_name, // e.g., 'ADMIN'
-                restaurant_id: user.restaurant_id
+                restaurantId: user.restaurant_id
             }
         });
     });
@@ -150,15 +150,47 @@ app.post('/api/staff', authenticateToken, (req, res) => {
     });
 });
 
-// 5. GET ORDERS (Compatible with ALL MySQL versions)
+
+// POST /api/menu - Add a new menu item
+app.post('/api/menu', authenticateToken, (req, res) => {
+    // 1. Get Restaurant ID from the logged-in user's token
+    const restaurantId = req.user.restaurantId;
+
+    if (!restaurantId) {
+        return res.status(403).json({ message: "No restaurant ID found for this user" });
+    }
+
+    // 2. Destructure fields from the form
+    const { name, category, price, stock, is_available } = req.body;
+
+    // 3. SQL Query
+    const sql = `
+        INSERT INTO menu 
+        (restaurant_id, name, category, price, stock, is_available) 
+        VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    // 4. Execute
+    db.query(sql, [restaurantId, name, category, price, stock, is_available], (err, result) => {
+        if (err) {
+            console.error("Error adding menu item:", err);
+            return res.status(500).json({ message: "Database error", error: err.message });
+        }
+
+        res.status(201).json({ 
+            message: "Menu item added successfully", 
+            itemId: result.insertId 
+        });
+    });
+});
+
+// GET ORDERS (Corrected for Relational Tables)
 app.get('/api/orders', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
-    
-    // Step 1: Get the "Flat" data. 
-    // This returns multiple rows for the same order if it has multiple items.
+
     const query = `
         SELECT o.id, o.table_number, o.status, o.total, o.created_at, 
-               m.name as menu_name, oi.quantity
+               m.name as menu_name, oi.quantity, oi.menu_id
         FROM orders o 
         LEFT JOIN order_items oi ON o.id = oi.order_id 
         LEFT JOIN menu m ON oi.menu_id = m.id
@@ -168,40 +200,41 @@ app.get('/api/orders', authenticateToken, (req, res) => {
 
     db.query(query, [restaurantId], (err, results) => {
         if (err) {
-            console.error(err);
+            console.error("Error fetching orders:", err);
             return res.status(500).json(err);
         }
 
-        // Step 2: Group the data manually in JavaScript
-        // We use a Map to merge duplicates into a single order with an 'items' list
-        const ordersMap = new Map();
+        // --- THE FIX: GROUPING LOGIC ---
+        const ordersMap = {};
 
         results.forEach(row => {
-            if (!ordersMap.has(row.id)) {
-                // If this is the first time we see this Order ID, create the order object
-                ordersMap.set(row.id, {
+            // 1. If this order isn't in our map yet, create the main entry
+            if (!ordersMap[row.id]) {
+                ordersMap[row.id] = {
                     id: row.id,
                     table_number: row.table_number,
                     status: row.status,
                     total: row.total,
                     created_at: row.created_at,
-                    items: [] // Initialize empty list
-                });
+                    items: [] // Initialize empty array for items
+                };
             }
 
-            // If this row has a menu item, add it to the list
+            // 2. If this row has an item (it's not null from the Left Join), add it
             if (row.menu_name) {
-                ordersMap.get(row.id).items.push({
+                ordersMap[row.id].items.push({
                     name: row.menu_name,
-                    quantity: row.quantity
+                    quantity: row.quantity,
+                    menuId: row.menu_id
                 });
             }
         });
 
-        // Step 3: Convert the Map back to a clean Array
-        const finalOrders = Array.from(ordersMap.values());
+        // 3. Convert the map object back to an array
+        const nestedOrders = Object.values(ordersMap);
 
-        res.json(finalOrders);
+        // 4. Send the nice, nested structure to React
+        res.json(nestedOrders);
     });
 });
 
@@ -249,37 +282,86 @@ app.get('/api/reports', authenticateToken, (req, res) => {
 
 
 
-// Note: We added 'authenticateToken' as the second argument here
+// POST /api/orders (Hybrid: Saves JSON + Relational Rows)
 app.post('/api/orders', authenticateToken, (req, res) => {
     
-    // 1. Extract waiterId automatically from the token (secure!)
+    // 1. Keep your existing ID extraction logic
     const waiterId = req.user.id; 
-    // Note: If your token payload calls it 'userId', use req.user.userId instead.
+    const restaurantId = req.user.restaurantId; 
 
-    const { tableNumber, items, total, restaurantId } = req.body;
-    const finalRestaurantId = restaurantId || 1; 
+    if (!restaurantId) {
+        return res.status(403).json({ message: "Critical Error: User not linked to a restaurant." });
+    }
 
-    // 2. The SQL remains the same
-    const sql = `
-        INSERT INTO orders 
-        (restaurant_id, waiter_id, table_number, items, total, status, created_at) 
-        VALUES (?, ?, ?, ?, ?, ?, NOW())
-    `;
+    const { tableNumber, items, total } = req.body;
 
-    const itemsString = JSON.stringify(items);
-    const status = 'pending';
+    // 2. Start a Transaction (Ensures both saves happen, or neither)
+    db.beginTransaction(err => {
+        if (err) return res.status(500).json({ message: "Transaction Error", error: err });
 
-    // 3. Execute
-    db.query(sql, [finalRestaurantId, waiterId, tableNumber, itemsString, total, status], (err, result) => {
-        if (err) {
-            console.error("Error inserting order:", err);
-            return res.status(500).json({ message: "Database error", error: err.message });
-        }
+        // 3. Insert into ORDERS table 
+        // We KEEP the 'items' column with JSON string so your Waiter App doesn't break!
+        const itemsString = JSON.stringify(items);
+        const status = 'pending';
 
-        res.status(201).json({ 
-            message: "Order placed successfully", 
-            orderId: result.insertId,
-            waiterId: waiterId // Optional: Send back to confirm
+        const sqlOrder = `
+            INSERT INTO orders 
+            (restaurant_id, waiter_id, table_number, items, total, status, created_at) 
+            VALUES (?, ?, ?, ?, ?, ?, NOW())
+        `;
+
+        db.query(sqlOrder, [restaurantId, waiterId, tableNumber, itemsString, total, status], (err, result) => {
+            if (err) {
+                // If this fails, undo everything
+                return db.rollback(() => {
+                    console.error("Error inserting order:", err);
+                    res.status(500).json({ message: "Database error", error: err.message });
+                });
+            }
+
+            const newOrderId = result.insertId;
+
+            // 4. NEW STEP: Insert into ORDER_ITEMS table (For Kitchen)
+            if (!items || items.length === 0) {
+                 return db.rollback(() => {
+                    res.status(400).json({ message: "Order must have items" });
+                });
+            }
+
+            // Map the items to array of arrays: [[orderId, menuId, quantity], ...]
+            // We use 'item.menuId' because that's what your React frontend sends
+            const orderItemsValues = items.map(item => [
+                newOrderId,
+                item.menuId, 
+                item.quantity
+            ]);
+
+            const sqlItems = `INSERT INTO order_items (order_id, menu_id, quantity) VALUES ?`;
+
+            db.query(sqlItems, [orderItemsValues], (err, resultItems) => {
+                if (err) {
+                    return db.rollback(() => {
+                        console.error("Error inserting order items:", err);
+                        res.status(500).json({ message: "Failed to save order items detail", error: err.message });
+                    });
+                }
+
+                // 5. Commit (Save everything permanently)
+                db.commit(err => {
+                    if (err) {
+                        return db.rollback(() => {
+                            res.status(500).json({ message: "Commit failed" });
+                        });
+                    }
+
+                    // Success Response (Matches your original format)
+                    res.status(201).json({ 
+                        message: "Order placed successfully", 
+                        orderId: newOrderId,
+                        waiterId: waiterId 
+                    });
+                });
+            });
         });
     });
 });

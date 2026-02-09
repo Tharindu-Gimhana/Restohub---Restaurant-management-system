@@ -41,7 +41,9 @@ const App = () => {
         />
 
         <Route path="/signup" element={<Signup />} />
+
         <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
+
 
         
       </Routes>
