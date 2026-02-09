@@ -2,8 +2,33 @@ import React, { useEffect, useState } from 'react';
 import { db } from '../services/db';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
+
+
 const Reports = () => {
   const [data, setData] = useState(null);
+
+//New part for currency symbol
+
+  const [currency, setCurrency] = useState(localStorage.getItem('currency') || '$');
+
+  useEffect(() => {
+    // 1. Create a function to check storage and update state
+    const checkCurrency = () => {
+      setCurrency(localStorage.getItem('currency') || '$');
+    };
+
+    // 2. Listen for the 'storage' event (the "shout" from AdminOverview)
+    window.addEventListener('storage', checkCurrency);
+
+    // 3. Cleanup listener when component unmounts
+    return () => {
+      window.removeEventListener('storage', checkCurrency);
+    };
+  }, []);
+
+
+
+
 
   useEffect(() => {
     const loadData = async () => {
@@ -27,7 +52,7 @@ const Reports = () => {
         {/* Income Card */}
         <div className="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-6 text-white shadow-lg">
           <p className="opacity-80 mb-1">Total Verified Revenue</p>
-          <h3 className="text-4xl font-bold">${Number(data.revenue).toFixed(2)}</h3>
+          <h3 className="text-4xl font-bold">{currency}{Number(data.revenue).toFixed(2)}</h3>
           <p className="text-sm opacity-80 mt-2">From {data.totalOrders} completed orders</p>
         </div>
 

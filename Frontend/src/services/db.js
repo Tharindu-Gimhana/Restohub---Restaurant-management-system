@@ -5,6 +5,13 @@
 
 const BASE_URL = 'http://localhost:5000/api';
 
+
+// 1. Create a variable to store the currency "in memory"
+let cachedCurrency = null;
+
+
+
+
 // Helper to retrieve the JWT token from Local Storage
 const getToken = () => localStorage.getItem('rms_token');
 
@@ -147,6 +154,59 @@ export const db = {
         return await response.json();
     },
 
+    // 2. The Smart Get Currency Function
+    getCurrency: async () => {
+        // CHECK: Do we already know the currency?
+        if (cachedCurrency) {
+            console.log("Using cached currency (No Server Call needed!)");
+            return cachedCurrency; 
+        }
+
+        // IF NOT: We have to ask the server (only happens the very first time)
+        try {
+            // Assume you have a helper or use fetch directly
+            const response = await fetch(`${BASE_URL}/settings/currency`, {
+                headers: getHeaders()
+            });
+            const data = await response.json();
+            
+            // SAVE IT: Remember the result for next time
+            cachedCurrency = data.currency; 
+            
+            return data.currency;
+        } catch (e) {
+            console.error("Failed to fetch currency", e);
+            return '$'; // Fallback if server is down
+        }
+    },
+
+    // Inside services/db.js
+
+updateCurrency: async (symbol) => {
+    // 1. Call the backend to save it permanently
+    const response = await fetch(`${BASE_URL}/settings/currency`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}` // Ensure headers are included
+        },
+        body: JSON.stringify({ symbol: symbol }) // Send as JSON object
+    
+    });
+
+    if (!response.ok) {
+        throw new Error("Failed to update currency");
+
+    }
+    console.log("currency stored in the db");
+
+
+    // 2. Update the local cache immediately (so the UI updates without reload)
+    cachedCurrency = symbol; 
+    
+    return await response.json();
+},
+
     // --- REPORTS ---
     getReports: async () => {
         const response = await fetch(`${BASE_URL}/reports`, {
@@ -156,6 +216,8 @@ export const db = {
         return await response.json();
     }
 };
+
+
 
 
 

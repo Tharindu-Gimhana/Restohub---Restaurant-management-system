@@ -7,6 +7,26 @@ const CashierDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('ALL'); // ALL, PENDING, PAID
 
+  //New part for currency symbol
+  
+    const [currency, setCurrency] = useState(localStorage.getItem('currency') || '$');
+  
+    useEffect(() => {
+      // 1. Create a function to check storage and update state
+      const checkCurrency = () => {
+        setCurrency(localStorage.getItem('currency') || '$');
+      };
+  
+      // 2. Listen for the 'storage' event (the "shout" from AdminOverview)
+      window.addEventListener('storage', checkCurrency);
+  
+      // 3. Cleanup listener when component unmounts
+      return () => {
+        window.removeEventListener('storage', checkCurrency);
+      };
+    }, []);
+  
+
   // 1. Define the fetch function safely
   const fetchOrders = async () => {
     try {
@@ -72,7 +92,7 @@ const CashierDashboard = () => {
             </div>
           </div>
           <p className="text-3xl font-bold text-slate-800">
-            ${orders
+            {currency}{orders
               .filter(o => o.status === 'PAID')
               .reduce((sum, o) => sum + Number(o.total), 0)
               .toFixed(2)}
@@ -126,7 +146,7 @@ const CashierDashboard = () => {
                     <td className="p-4 font-mono">#{order.id}</td>
                     <td className="p-4 font-bold">{order.table_number}</td>
                     <td className="p-4">{order.waiter_name || 'N/A'}</td>
-                    <td className="p-4 font-bold text-slate-800">${Number(order.total).toFixed(2)}</td>
+                    <td className="p-4 font-bold text-slate-800">{currency}{Number(order.total).toFixed(2)}</td>
                     <td className="p-4">
                       <span className={`px-2 py-1 rounded text-xs font-bold ${
                         order.status === 'PAID' ? 'bg-green-100 text-green-700' :

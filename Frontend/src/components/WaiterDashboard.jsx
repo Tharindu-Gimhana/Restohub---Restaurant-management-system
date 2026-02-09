@@ -7,6 +7,26 @@ const WaiterDashboard = ({ user }) => {
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('orders'); // 'orders' or 'new'
+
+  //New part for currency symbol
+  
+    const [currency, setCurrency] = useState(localStorage.getItem('currency') || '$');
+  
+    useEffect(() => {
+      // 1. Create a function to check storage and update state
+      const checkCurrency = () => {
+        setCurrency(localStorage.getItem('currency') || '$');
+      };
+  
+      // 2. Listen for the 'storage' event (the "shout" from AdminOverview)
+      window.addEventListener('storage', checkCurrency);
+  
+      // 3. Cleanup listener when component unmounts
+      return () => {
+        window.removeEventListener('storage', checkCurrency);
+      };
+    }, []);
+  
   
   // New Order State
   const [newOrder, setNewOrder] = useState({
@@ -122,7 +142,7 @@ const WaiterDashboard = ({ user }) => {
                 {/* Note: Items might not be in the simple order fetch, so we just show total */}
                 <div className="mt-4 pt-4 border-t border-slate-50 flex justify-between items-center">
                   <span className="text-slate-600 font-medium">Total Bill</span>
-                  <span className="text-lg font-bold text-slate-800">${Number(order.total).toFixed(2)}</span>
+                  <span className="text-lg font-bold text-slate-800">{currency}{Number(order.total).toFixed(2)}</span>
                 </div>
               </div>
             ))
@@ -148,7 +168,7 @@ const WaiterDashboard = ({ user }) => {
                 >
                   <div>
                     <p className="font-medium text-slate-800">{item.name}</p>
-                    <p className="text-sm text-slate-500">${item.price}</p>
+                    <p className="text-sm text-slate-500">{currency}{item.price}</p>
                   </div>
                   <PlusCircle size={20} className="text-indigo-400" />
                 </div>
@@ -178,7 +198,7 @@ const WaiterDashboard = ({ user }) => {
                 return (
                   <div key={id} className="flex justify-between text-sm">
                     <span>{item.name} <span className="text-slate-400">x{qty}</span></span>
-                    <span className="font-medium">${(item.price * qty).toFixed(2)}</span>
+                    <span className="font-medium">{currency}{(item.price * qty).toFixed(2)}</span>
                   </div>
                 );
               })}
@@ -190,7 +210,7 @@ const WaiterDashboard = ({ user }) => {
             <div className="pt-4 border-t border-slate-100 mb-6">
               <div className="flex justify-between items-center text-xl font-bold text-slate-800">
                 <span>Total</span>
-                <span>${calculateTotal().toFixed(2)}</span>
+                <span>{currency}{calculateTotal().toFixed(2)}</span>
               </div>
             </div>
 
