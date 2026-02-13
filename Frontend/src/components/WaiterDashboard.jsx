@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/db';
-import { PlusCircle, Clock, CheckCircle, Utensils } from 'lucide-react';
+import { PlusCircle, Clock, CheckCircle, Utensils, MinusCircle } from 'lucide-react';
 
 const WaiterDashboard = ({ user }) => {
   const [orders, setOrders] = useState([]);
@@ -150,29 +150,80 @@ const WaiterDashboard = ({ user }) => {
         </div>
       )}
 
-      {/* VIEW 2: NEW ORDER FORM */}
+{/* VIEW 2: NEW ORDER FORM */}
       {activeTab === 'new' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Menu Selection */}
           <div className="md:col-span-2 space-y-4">
             <h3 className="font-bold text-slate-700">Select Items</h3>
             <div className="grid grid-cols-2 gap-3">
-              {menu.map(item => (
-                <div 
-                  key={item.id} 
-                  onClick={() => setNewOrder(prev => ({
-                    ...prev,
-                    items: { ...prev.items, [item.id]: (prev.items[item.id] || 0) + 1 }
-                  }))}
-                  className="bg-white p-4 rounded-lg border border-slate-200 cursor-pointer hover:border-indigo-500 hover:shadow-md transition-all flex justify-between items-center"
-                >
-                  <div>
-                    <p className="font-medium text-slate-800">{item.name}</p>
-                    <p className="text-sm text-slate-500">{currency}{item.price}</p>
+              {menu.map(item => {
+                // Get current quantity for this specific item
+                const quantity = newOrder.items[item.id] || 0;
+
+                return (
+                  <div 
+                    key={item.id} 
+                    className={`p-4 rounded-lg border transition-all flex justify-between items-center ${
+                      quantity > 0 ? 'border-indigo-500 bg-indigo-50 shadow-md' : 'bg-white border-slate-200'
+                    }`}
+                  >
+                    {/* Product Info */}
+                    <div>
+                      <p className="font-medium text-slate-800">{item.name}</p>
+                      <p className="text-sm text-slate-500">{currency}{item.price}</p>
+                    </div>
+
+                    {/* Quantity Controls */}
+                    <div className="flex items-center gap-3">
+                      {/* Minus Button (Only show if quantity > 0) */}
+                      {quantity > 0 && (
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation(); // Stop bubbling
+                            setNewOrder(prev => {
+                              const currentQty = prev.items[item.id] || 0;
+                              const newItems = { ...prev.items };
+                              
+                              if (currentQty > 1) {
+                                newItems[item.id] = currentQty - 1;
+                              } else {
+                                delete newItems[item.id]; // Remove item if count goes to 0
+                              }
+                              
+                              return { ...prev, items: newItems };
+                            });
+                          }}
+                          className="text-red-500 hover:text-red-700 transition-colors"
+                        >
+                          <MinusCircle size={24} />
+                        </button>
+                      )}
+
+                      {/* Quantity Display */}
+                      {quantity > 0 && (
+                        <span className="font-bold text-slate-800 w-6 text-center">
+                          {quantity}
+                        </span>
+                      )}
+
+                      {/* Plus Button */}
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setNewOrder(prev => ({
+                            ...prev,
+                            items: { ...prev.items, [item.id]: (prev.items[item.id] || 0) + 1 }
+                          }));
+                        }}
+                        className="text-indigo-600 hover:text-indigo-800 transition-colors"
+                      >
+                        <PlusCircle size={24} />
+                      </button>
+                    </div>
                   </div>
-                  <PlusCircle size={20} className="text-indigo-400" />
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

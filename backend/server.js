@@ -121,11 +121,20 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // 3. GET MENU (Public or Private)
-app.get('/api/menu', (req, res) => {
-    // If you want to filter by restaurant, you might need to pass a query param or use the token
-    // For now, let's assume we fetch all items (or you can add ?restaurant_id=1)
-    const sql = 'SELECT * FROM menu';
-    db.query(sql, (err, results) => {
+app.get('/api/menu', authenticateToken , (req, res) => {
+    // 1. Get the ID directly from the decoded token
+    // (Ensure your login code included 'restaurantId' in the token payload!)
+    const restaurantId = req.user.restaurantId; 
+
+    // 2. Safety Check (optional but good)
+    if (!restaurantId) {
+        return res.status(403).json({ error: "Invalid token: No restaurant ID found." });
+    }
+
+    // 3. Run the SQL 
+    const sql = 'SELECT * FROM menu WHERE restaurant_id = ?';
+
+    db.query(sql, [restaurantId], (err, results) => {
         if (err) return res.status(500).json(err);
         res.json(results);
     });
@@ -187,6 +196,7 @@ app.post('/api/menu', authenticateToken, (req, res) => {
 // GET ORDERS (Corrected for Relational Tables)
 app.get('/api/orders', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
+    console.log("User in Request:", req.user);
 
     const query = `
         SELECT o.id, o.table_number, o.status, o.total, o.created_at, 
