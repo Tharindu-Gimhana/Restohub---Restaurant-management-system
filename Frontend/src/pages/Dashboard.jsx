@@ -6,7 +6,8 @@ import {
   Users, 
   TrendingUp, 
   LogOut,
-  Settings
+  Settings,
+  ChevronLeft
 } from 'lucide-react';
 
 // Import the sub-components
@@ -17,11 +18,37 @@ import WaiterDashboard from '../components/WaiterDashboard';
 import KitchenDashboard from '../components/KitchenDashboard';
 import CashierDashboard from '../components/CashierDashboard';
 import MenuManagement from '../components/MenuManagement';
+import { useOrderContext } from '@/Context/OrderContext';
 
 const Dashboard = ({ user, onLogout }) => {
+
+
+  // DEBUGGING: Check these values in your browser console
+  console.log("Current Role:", user?.role || user?.role_name); 
   const location = useLocation();
   const currentRole = (user?.role_name || user?.role || '').toUpperCase();
 
+  
+
+
+  // 2. GET CONTEXT VALUES
+  // These control the sidebar when a Waiter is taking an order
+  const { 
+    isOrderMode, 
+    setIsOrderMode, 
+    categories, 
+    selectedCategory, 
+    setSelectedCategory 
+  } = useOrderContext();
+
+  
+  console.log("Is Order Mode?", isOrderMode);
+  console.log("Categories in Context:", categories);
+
+
+  
+  
+  
   // 1. Define Admin Navigation Links
   const adminLinks = [
     { label: 'Overview', path: '/dashboard', icon: LayoutDashboard },
@@ -84,6 +111,72 @@ const Dashboard = ({ user, onLogout }) => {
             <LogOut size={16} /> Logout
           </button>
         </div>
+
+
+
+
+        {/*new part for control the new order section of the  waiter panel */}
+        {/* ================================================= */}
+          {/* SCENARIO 2: WAITER MENU (Dynamic Categories) */}
+          {/* ================================================= */}
+          {currentRole === 'WAITER' && isOrderMode && (
+            <nav className="space-y-1 animate-fadeIn">
+              <div className="px-2 mb-4">
+                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                   Menu Categories
+                 </p>
+              </div>
+
+              {categories.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`w-full text-left px-4 py-3 rounded-lg transition-all flex justify-between items-center ${
+                    selectedCategory === cat
+                      ? 'bg-indigo-600 text-white font-bold shadow-md transform scale-105'
+                      : 'hover:bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  <span>{cat}</span>
+                  {selectedCategory === cat && <div className="w-2 h-2 bg-white rounded-full"></div>}
+                </button>
+              ))}
+
+              {/* Exit Order Mode Button */}
+              <div className="mt-8 pt-6 border-t border-slate-800">
+                <button 
+                  onClick={() => setIsOrderMode(false)}
+                  className="w-full flex items-center gap-2 text-red-400 hover:text-red-300 hover:bg-slate-800 px-4 py-3 rounded-lg transition-colors font-medium text-sm"
+                >
+                  <ChevronLeft size={16} />
+                  Back to Orders
+                </button>
+              </div>
+            </nav>
+          )}
+          
+          {/* Helper text if Waiter is NOT in order mode */}
+          {currentRole === 'WAITER' && !isOrderMode && (
+             <div className="mt-10 p-4 bg-slate-800 rounded-lg border border-slate-700">
+                <p className="text-sm text-slate-400 text-center">
+                   Click <strong>"New Order"</strong> on your dashboard to view menu categories here.
+                </p>
+             </div>
+          )}
+
+     
+
+
+
+
+
+
+
+
+
+
+
+
       </aside>
 
       {/* --- MAIN CONTENT AREA --- */}

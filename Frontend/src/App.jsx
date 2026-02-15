@@ -3,6 +3,8 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Signup from './pages/Signup';
+import { OrderProvider } from './Context/OrderContext';
+
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -29,16 +31,17 @@ const App = () => {
   if (loading) return <div className="h-screen flex items-center justify-center">Loading GourmetOS...</div>;
 
   return (
-    <HashRouter>
-      <Routes>
-        <Route 
-          path="/login" 
-          element={user ? <Navigate to="/dashboard" /> : <Login onLogin={handleLogin} />} 
-        />
-        <Route 
-          path="/dashboard/*" 
-          element={user ? <Dashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" />} 
-        />
+    <OrderProvider>
+      <HashRouter>
+        <Routes>
+          <Route 
+            path="/login" 
+            element={user ? <Navigate to="/dashboard" /> : <Login onLogin={handleLogin} />} 
+          />
+          <Route 
+            path="/dashboard/*" 
+            element={user ? <Dashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" />} 
+          />
 
         <Route path="/signup" element={<Signup />} />
 
@@ -48,6 +51,7 @@ const App = () => {
         
       </Routes>
     </HashRouter>
+  </OrderProvider>
   );
 };
 

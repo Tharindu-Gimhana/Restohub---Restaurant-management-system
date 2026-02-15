@@ -1,12 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../services/db';
 import { PlusCircle, Clock, CheckCircle, Utensils, MinusCircle } from 'lucide-react';
+import { useOrderContext } from '@/Context/OrderContext';
 
 const WaiterDashboard = ({ user }) => {
   const [orders, setOrders] = useState([]);
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('orders'); // 'orders' or 'new'
+  
+  // Grab the controls from the Context
+  const { 
+    setIsOrderMode, 
+    setCategories, 
+    selectedCategory, 
+    setSelectedCategory 
+  } = useOrderContext();
 
   //New part for currency symbol
   
@@ -94,22 +103,67 @@ const WaiterDashboard = ({ user }) => {
     }
   };
 
+
+
+// 1. CALCULATE CATEGORIES EFFICIENTLY
+  // We extract unique categories from the loaded menu
+  useEffect(() => {
+    if (menu.length > 0) {
+      const uniqueCats = ['All', ...new Set(menu.map(item => item.category || 'Other'))];
+      // Send these to the Sidebar!
+
+      console.log("Sending categories to Sidebar:", uniqueCats); // <--- DEBUG LOG
+      setCategories(uniqueCats);
+    }
+  }, [menu, setCategories]);
+
+
+  // 2. HANDLE "NEW ORDER" CLICK
+  const handleNewOrderClick = () => {
+    setActiveTab('new');
+    setIsOrderMode(true); // <--- This transforms the Sidebar!
+    setSelectedCategory('All'); // Reset to first category
+  };
+
+  // 3. FILTER FOODS BASED ON SIDEBAR SELECTION
+  // This listens to 'selectedCategory' which changes when you click the Sidebar
+  const filteredItems = useMemo(() => {
+    if (selectedCategory === 'All') return menu;
+    return menu.filter(item => (item.category || 'Other') === selectedCategory);
+  }, [selectedCategory, menu]);
+
+
+
+
+
+
   if (loading) return <div className="p-8 text-center">Loading Service Dashboard...</div>;
 
   return (
     <div className="space-y-6">
       {/* Tab Switcher */}
       <div className="flex gap-4 border-b border-slate-200 pb-4">
+        
+        {/* BUTTON 1: ACTIVE ORDERS (Clicking this should HIDE categories) */}
         <button 
-          onClick={() => setActiveTab('orders')}
+          onClick={() => {
+            setActiveTab('orders');
+            setIsOrderMode(false); // <--- IMPORTANT: Turn OFF Order Mode
+          }}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
             activeTab === 'orders' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
           <Clock size={18} /> Active Orders
         </button>
+
+        {/* BUTTON 2: NEW ORDER (Clicking this should SHOW categories) */}
         <button 
-          onClick={() => setActiveTab('new')}
+          onClick={() => {
+            setActiveTab('new');
+            setIsOrderMode(true);        // <--- 1. Tell Sidebar to show categories
+            setSelectedCategory('All');  // <--- 2. Reset filter to "All"
+          }}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
             activeTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
           }`}
