@@ -207,6 +207,44 @@ updateCurrency: async (symbol) => {
     return await response.json();
 },
 
+
+// 1. CANCEL ORDER
+  cancelOrder: async (orderId) => {
+    try {
+      const response = await fetch('http://localhost:5000/api/orders/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId }),
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to cancel');
+      return data;
+    } catch (error) {
+      console.error("DB Service Error:", error);
+      throw error; // Re-throw so component can show alert
+    }
+  },
+
+  // 2. UPDATE ORDER (Add Items)
+  updateOrder: async (updateData) => {
+    // updateData = { orderId: 123, items: [{menuId: 1, quantity: 2}] }
+    try {
+      const response = await fetch('http://localhost:5000/api/orders/add-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updateData),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to update order');
+      return data;
+    } catch (error) {
+      console.error("DB Service Error:", error);
+      throw error;
+    }
+  },
+
     // --- REPORTS ---
     getReports: async () => {
         const response = await fetch(`${BASE_URL}/reports`, {

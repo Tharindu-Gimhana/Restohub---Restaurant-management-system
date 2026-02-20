@@ -44,6 +44,24 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+
+
+const http = require('http');
+const { Server } = require('socket.io');
+
+const server = http.createServer(app);
+
+// 1. Initialize Socket.io
+const io = new Server(server, {
+    cors: {
+        origin: "http://localhost:3000", // Make sure this matches your frontend port
+        methods: ["GET", "POST"]
+    }
+});
+
+// 2. CRITICAL FIX: Attach it to the app!
+app.set('socketio', io);  // <--- THIS IS THE MISSING LINE
+
 // ==========================================
 //                 ROUTES
 // ==========================================
@@ -372,6 +390,97 @@ app.post('/api/orders', authenticateToken, (req, res) => {
                     });
                 });
             });
+        });
+    });
+});
+
+
+// 2. CANCEL ORDER (Waiter Action)
+app.post('/api/orders/cancel', (req, res) => {
+    const { orderId } = req.body;
+
+    // Step 1: Check the status first
+    const checkQuery = 'SELECT status FROM orders WHERE id = ?';
+    
+    db.query(checkQuery, [orderId], (err, results) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ message: "Database error during status check" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "Order not found" });
+        }
+
+        const currentStatus = results[0].status;
+
+        // Security Check: Only allow if PENDING
+        if (currentStatus !== 'PENDING') {
+            return res.status(403).json({ message: "Cannot cancel! Kitchen has already started." });
+        }
+
+        // Step 2: Delete the order
+        const deleteQuery = 'DELETE FROM orders WHERE id = ?';
+        db.query(deleteQuery, [orderId], (err, deleteResult) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ message: "Failed to delete order" });
+            }
+
+            // Step 3: Notify Kitchen via Socket
+            // (Assumes 'io' is defined in this file, or we get it from app)
+            if (typeof io !== 'undefined') {
+                io.emit('order_cancelled', { orderId });
+            } else {
+                // Fallback if io variable isn't global
+                req.app.get('socketio').emit('order_cancelled', { orderId });
+            }
+
+            res.json({ success: true, message: "Order cancelled successfully" });
+        });
+    });
+});
+
+
+
+// 3. ADD ITEMS TO ORDER (Update Existing Order & Total)
+app.post('/api/orders/add-items', (req, res) => {
+    // We now extract 'addedTotal' from the request body as well
+    const { orderId, items, addedTotal } = req.body; 
+
+    if (!items || items.length === 0) {
+        return res.status(400).json({ message: "No items provided" });
+    }
+
+    // Prepare data for Bulk Insert
+    const values = items.map(item => [orderId, item.menuId, item.quantity]);
+    const insertQuery = 'INSERT INTO order_items (order_id, menu_id, quantity) VALUES ?';
+
+    // QUERY 1: Insert the new foods into order_items
+    db.query(insertQuery, [values], (err, result) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ message: "Database error inserting items" });
+        }
+
+        // QUERY 2: Update the total price in the orders table
+        // We use "total = total + ?" to safely add the new amount to whatever the current bill is
+        const updateQuery = 'UPDATE orders SET total = total + ? WHERE id = ?';
+        
+        db.query(updateQuery, [addedTotal, orderId], (err, updateResult) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ message: "Database error updating total" });
+            }
+
+            // Both queries succeeded! Notify Kitchen to re-fetch this order
+            if (typeof io !== 'undefined') {
+                io.emit('order_updated', { orderId });
+            } else {
+                req.app.get('socketio').emit('order_updated', { orderId });
+            }
+
+            res.json({ success: true, message: "Items added and total updated successfully" });
         });
     });
 });
