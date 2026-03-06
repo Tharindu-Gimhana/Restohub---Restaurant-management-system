@@ -38,7 +38,7 @@ jobs:
           rsync -az --delete \
             --exclude ".git" \
             --exclude "node_modules" \
-            --exclude ".env" \
+            --exclude "/.env" \
             ./ ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_APP_DIR }}
 
       - name: Install, build, restart
