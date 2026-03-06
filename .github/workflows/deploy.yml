@@ -21,9 +21,13 @@ jobs:
 
       - name: Sync to Droplet
         run: |
+          ssh ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} "mkdir -p ${{ secrets.DO_APP_DIR }}"
+
           rsync -az --delete \
             --exclude ".git" \
             --exclude "node_modules" \
+            --exclude "backend/.env" \
+            --exclude ".env" \
             ./ ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_APP_DIR }}
 
       - name: Install, build, restart
@@ -31,6 +35,11 @@ jobs:
           ssh ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'EOF'
             set -e
             cd ${{ secrets.DO_APP_DIR }}
+
+            if [ ! -f backend/.env ]; then
+              echo "ERROR: backend/.env is missing on droplet. Create it before deploy." >&2
+              exit 1
+            fi
 
             cd backend
             npm ci --omit=dev
@@ -47,4 +56,9 @@ jobs:
 
             pm2 startOrReload ecosystem.config.cjs --update-env
             pm2 save
+
+            curl --max-time 15 -sS -o /dev/null -w "%{http_code}" \
+              -X POST "http://127.0.0.1:5000/api/auth/login" \
+              -H "Content-Type: application/json" \
+              -d '{"username":"healthcheck","password":"healthcheck"}' | grep -E "^(200|401)$"
           EOF
