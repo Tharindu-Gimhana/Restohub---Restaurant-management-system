@@ -1,0 +1,50 @@
+name: Deploy to DigitalOcean Droplet
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DO_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.DO_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync to Droplet
+        run: |
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude "node_modules" \
+            ./ ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_APP_DIR }}
+
+      - name: Install, build, restart
+        run: |
+          ssh ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'EOF'
+            set -e
+            cd ${{ secrets.DO_APP_DIR }}
+
+            cd backend
+            npm ci --omit=dev
+            cd ..
+
+            cd Frontend
+            npm ci
+            npm run build
+            cd ..
+
+            if ! command -v pm2 >/dev/null 2>&1; then
+              npm install -g pm2
+            fi
+
+            pm2 startOrReload ecosystem.config.cjs --update-env
+            pm2 save
+          EOF

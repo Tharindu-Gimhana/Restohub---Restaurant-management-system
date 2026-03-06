@@ -7,7 +7,11 @@ const jwt = require('jsonwebtoken');
 const app = express();
 
 // --- MIDDLEWARE ---
-app.use(cors());
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+app.use(cors({
+    origin: corsOrigin.split(',').map(origin => origin.trim()),
+    credentials: true
+}));
 app.use(express.json());
 
 // --- CONFIGURATION ---
@@ -54,7 +58,7 @@ const server = http.createServer(app);
 // 1. Initialize Socket.io
 const io = new Server(server, {
     cors: {
-        origin: "http://localhost:3000", // Make sure this matches your frontend port
+        origin: corsOrigin.split(',').map(origin => origin.trim()),
         methods: ["GET", "POST"]
     }
 });
@@ -216,9 +220,10 @@ app.get('/api/orders', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
     console.log("User in Request:", req.user);
 
+    // 1. UPDATED SQL: Grab both timestamps and alias them to prevent collision
     const query = `
-        SELECT o.id, o.table_number, o.status, o.total, o.created_at, 
-               m.name as menu_name, oi.quantity, oi.menu_id
+        SELECT o.id, o.table_number, o.status, o.total, o.created_at AS order_created, 
+               m.name as menu_name, oi.quantity, oi.menu_id, oi.created_at AS item_created
         FROM orders o 
         LEFT JOIN order_items oi ON o.id = oi.order_id 
         LEFT JOIN menu m ON oi.menu_id = m.id
@@ -228,41 +233,39 @@ app.get('/api/orders', authenticateToken, (req, res) => {
 
     db.query(query, [restaurantId], (err, results) => {
         if (err) {
-            console.error("Error fetching orders:", err);
-            return res.status(500).json(err);
+            console.error("Database error fetching orders:", err);
+            return res.status(500).json({ error: "Database error" });
         }
 
-        // --- THE FIX: GROUPING LOGIC ---
+        // 2. GROUPING LOGIC: Combine the flat SQL rows into structured JSON
         const ordersMap = {};
 
         results.forEach(row => {
-            // 1. If this order isn't in our map yet, create the main entry
+            // If we haven't seen this order yet, create its envelope
             if (!ordersMap[row.id]) {
                 ordersMap[row.id] = {
                     id: row.id,
                     table_number: row.table_number,
                     status: row.status,
                     total: row.total,
-                    created_at: row.created_at,
-                    items: [] // Initialize empty array for items
+                    created_at: row.order_created, // The Main Order Time
+                    items: []
                 };
             }
 
-            // 2. If this row has an item (it's not null from the Left Join), add it
-            if (row.menu_name) {
+            // If this row has an item, push it into the items array
+            if (row.menu_id) {
                 ordersMap[row.id].items.push({
+                    menuId: row.menu_id,
                     name: row.menu_name,
                     quantity: row.quantity,
-                    menuId: row.menu_id
+                    created_at: row.item_created // THE MISSING PIECE: The Item Time!
                 });
             }
         });
 
-        // 3. Convert the map object back to an array
-        const nestedOrders = Object.values(ordersMap);
-
-        // 4. Send the nice, nested structure to React
-        res.json(nestedOrders);
+        // Convert the map object back into an array to send to the frontend
+        res.json(Object.values(ordersMap));
     });
 });
 
@@ -486,7 +489,43 @@ app.post('/api/orders/add-items', (req, res) => {
 });
 
 
+
+// 4. UPDATE ORDER STATUS (Kitchen Action)
+app.patch('/api/orders/:id/status', (req, res) => {
+    const orderId = req.params.id;
+    const { status } = req.body; // The frontend should be sending { "status": "COOKING" }
+
+    if (!status) {
+        return res.status(400).json({ message: "Status is required" });
+    }
+
+    // Update the database
+    const query = 'UPDATE orders SET status = ? WHERE id = ?';
+
+    db.query(query, [status, orderId], (err, result) => {
+        if (err) {
+            console.error("Error updating status:", err);
+            return res.status(500).json({ message: "Database Error" });
+        }
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Order not found" });
+        }
+
+        // --- THE INTEGRATION MAGIC (Sockets) ---
+        // Tell everyone (Waiters) that the status changed so their UI updates instantly
+        if (typeof io !== 'undefined') {
+            io.emit('order_status_updated', { orderId: parseInt(orderId), status });
+        } else {
+            req.app.get('socketio').emit('order_status_updated', { orderId: parseInt(orderId), status });
+        }
+
+        res.json({ success: true, message: `Order status updated to ${status}` });
+    });
+});
+
+
 // --- START SERVER ---
-app.listen(PORT, () => {
-    console.log(`Backend running on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Backend running on port ${PORT}`);
 });

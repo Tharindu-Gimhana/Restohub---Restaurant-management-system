@@ -3,7 +3,7 @@
  * Handles all communication with the Backend (Port 5000)
  */
 
-const BASE_URL = 'http://localhost:5000/api';
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
 
 // 1. Create a variable to store the currency "in memory"
@@ -186,10 +186,7 @@ updateCurrency: async (symbol) => {
     // 1. Call the backend to save it permanently
     const response = await fetch(`${BASE_URL}/settings/currency`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}` // Ensure headers are included
-        },
+        headers: getHeaders(),
         body: JSON.stringify({ symbol: symbol }) // Send as JSON object
     
     });
@@ -211,9 +208,9 @@ updateCurrency: async (symbol) => {
 // 1. CANCEL ORDER
   cancelOrder: async (orderId) => {
     try {
-      const response = await fetch('http://localhost:5000/api/orders/cancel', {
+            const response = await fetch(`${BASE_URL}/orders/cancel`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+                headers: getHeaders(),
         body: JSON.stringify({ orderId }),
       });
       
@@ -230,9 +227,9 @@ updateCurrency: async (symbol) => {
   updateOrder: async (updateData) => {
     // updateData = { orderId: 123, items: [{menuId: 1, quantity: 2}] }
     try {
-      const response = await fetch('http://localhost:5000/api/orders/add-items', {
+            const response = await fetch(`${BASE_URL}/orders/add-items`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+                headers: getHeaders(),
         body: JSON.stringify(updateData),
       });
 
