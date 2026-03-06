@@ -12,6 +12,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Generate backend env file
+        run: |
+          cat > backend/.env <<EOF
+          DB_HOST=${{ secrets.DB_HOST }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          PORT=${{ secrets.PORT }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}
+          EOF
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -26,7 +38,6 @@ jobs:
           rsync -az --delete \
             --exclude ".git" \
             --exclude "node_modules" \
-            --exclude "backend/.env" \
             --exclude ".env" \
             ./ ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_APP_DIR }}
 
@@ -37,7 +48,7 @@ jobs:
             cd ${{ secrets.DO_APP_DIR }}
 
             if [ ! -f backend/.env ]; then
-              echo "ERROR: backend/.env is missing on droplet. Create it before deploy." >&2
+              echo "ERROR: backend/.env is missing after sync." >&2
               exit 1
             fi
 
