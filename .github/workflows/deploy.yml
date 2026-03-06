@@ -68,8 +68,24 @@ jobs:
             pm2 startOrReload ecosystem.config.cjs --update-env
             pm2 save
 
-            curl --max-time 15 -sS -o /dev/null -w "%{http_code}" \
-              -X POST "http://127.0.0.1:5000/api/auth/login" \
-              -H "Content-Type: application/json" \
-              -d '{"username":"healthcheck","password":"healthcheck"}' | grep -E "^(200|401)$"
+            ok=0
+            for i in $(seq 1 12); do
+              code=$(curl --max-time 10 -sS -o /dev/null -w "%{http_code}" \
+                -X POST "http://127.0.0.1:5000/api/auth/login" \
+                -H "Content-Type: application/json" \
+                -d '{"username":"healthcheck","password":"healthcheck"}' || true)
+
+              if [ "$code" = "200" ] || [ "$code" = "401" ]; then
+                ok=1
+                break
+              fi
+
+              sleep 2
+            done
+
+            if [ "$ok" -ne 1 ]; then
+              echo "ERROR: Backend health check failed after restart" >&2
+              pm2 logs restohub-backend --lines 80 --nostream || true
+              exit 1
+            fi
           EOF
