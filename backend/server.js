@@ -19,19 +19,26 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_key'; // Safe
 const PORT = process.env.PORT || 5000;
 
 // --- DATABASE CONNECTION ---
-const db = mysql.createConnection({
+// Use a pool so dropped/idle connections are replaced automatically.
+const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '', // Add your DB password if you have one
-    database: process.env.DB_NAME || 'restaurant_db'
+    database: process.env.DB_NAME || 'restaurant_db',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
 });
 
-db.connect((err) => {
+db.getConnection((err, connection) => {
     if (err) {
         console.error('Database connection failed:', err.stack);
         return;
     }
     console.log('Connected to MySQL Database');
+    connection.release();
 });
 
 // --- AUTH MIDDLEWARE (Protect Routes) ---
@@ -118,24 +125,48 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/register', (req, res) => {
     const { restaurantName, username, email, password } = req.body;
 
-    db.beginTransaction(err => {
-        if (err) return res.status(500).json(err);
+    db.getConnection((connectionErr, connection) => {
+        if (connectionErr) return res.status(500).json(connectionErr);
 
-        // Create Restaurant
-        db.query('INSERT INTO restaurants (name, email) VALUES (?, ?)', 
-        [restaurantName, email], (err, result) => {
-            if (err) return db.rollback(() => res.status(500).json(err));
+        connection.beginTransaction(err => {
+            if (err) {
+                connection.release();
+                return res.status(500).json(err);
+            }
 
-            const restaurantId = result.insertId;
+            // Create Restaurant
+            connection.query('INSERT INTO restaurants (name, email) VALUES (?, ?)',
+            [restaurantName, email], (err, result) => {
+                if (err) {
+                    return connection.rollback(() => {
+                        connection.release();
+                        res.status(500).json(err);
+                    });
+                }
 
-            // Create Admin User (Role ID 1 = ADMIN)
-            db.query('INSERT INTO users (restaurant_id, username, password, name, role_id) VALUES (?, ?, ?, ?, ?)',
-            [restaurantId, username, password, 'Owner', 1], (err, result) => {
-                if (err) return db.rollback(() => res.status(500).json(err));
+                const restaurantId = result.insertId;
 
-                db.commit(err => {
-                    if (err) return db.rollback(() => res.status(500).json(err));
-                    res.status(201).json({ message: 'Restaurant Registered!' });
+                // Create Admin User (Role ID 1 = ADMIN)
+                connection.query('INSERT INTO users (restaurant_id, username, password, name, role_id) VALUES (?, ?, ?, ?, ?)',
+                [restaurantId, username, password, 'Owner', 1], (err) => {
+                    if (err) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json(err);
+                        });
+                    }
+
+                    connection.commit(err => {
+                        if (err) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                res.status(500).json(err);
+                            });
+                        }
+
+                        connection.release();
+                        res.status(201).json({ message: 'Restaurant Registered!' });
+                    });
                 });
             });
         });
@@ -326,70 +357,85 @@ app.post('/api/orders', authenticateToken, (req, res) => {
 
     const { tableNumber, items, total } = req.body;
 
-    // 2. Start a Transaction (Ensures both saves happen, or neither)
-    db.beginTransaction(err => {
-        if (err) return res.status(500).json({ message: "Transaction Error", error: err });
+    // 2. Start a transaction on a dedicated pooled connection.
+    db.getConnection((connectionErr, connection) => {
+        if (connectionErr) {
+            return res.status(500).json({ message: "Transaction Error", error: connectionErr });
+        }
 
-        // 3. Insert into ORDERS table 
-        // We KEEP the 'items' column with JSON string so your Waiter App doesn't break!
-        const itemsString = JSON.stringify(items);
-        const status = 'pending';
-
-        const sqlOrder = `
-            INSERT INTO orders 
-            (restaurant_id, waiter_id, table_number, items, total, status, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, NOW())
-        `;
-
-        db.query(sqlOrder, [restaurantId, waiterId, tableNumber, itemsString, total, status], (err, result) => {
+        connection.beginTransaction(err => {
             if (err) {
-                // If this fails, undo everything
-                return db.rollback(() => {
-                    console.error("Error inserting order:", err);
-                    res.status(500).json({ message: "Database error", error: err.message });
-                });
+                connection.release();
+                return res.status(500).json({ message: "Transaction Error", error: err });
             }
 
-            const newOrderId = result.insertId;
+            // 3. Insert into ORDERS table 
+            // We KEEP the 'items' column with JSON string so your Waiter App doesn't break!
+            const itemsString = JSON.stringify(items);
+            const status = 'pending';
 
-            // 4. NEW STEP: Insert into ORDER_ITEMS table (For Kitchen)
-            if (!items || items.length === 0) {
-                 return db.rollback(() => {
-                    res.status(400).json({ message: "Order must have items" });
-                });
-            }
+            const sqlOrder = `
+                INSERT INTO orders 
+                (restaurant_id, waiter_id, table_number, items, total, status, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, NOW())
+            `;
 
-            // Map the items to array of arrays: [[orderId, menuId, quantity], ...]
-            // We use 'item.menuId' because that's what your React frontend sends
-            const orderItemsValues = items.map(item => [
-                newOrderId,
-                item.menuId, 
-                item.quantity
-            ]);
-
-            const sqlItems = `INSERT INTO order_items (order_id, menu_id, quantity) VALUES ?`;
-
-            db.query(sqlItems, [orderItemsValues], (err, resultItems) => {
+            connection.query(sqlOrder, [restaurantId, waiterId, tableNumber, itemsString, total, status], (err, result) => {
                 if (err) {
-                    return db.rollback(() => {
-                        console.error("Error inserting order items:", err);
-                        res.status(500).json({ message: "Failed to save order items detail", error: err.message });
+                    // If this fails, undo everything
+                    return connection.rollback(() => {
+                        connection.release();
+                        console.error("Error inserting order:", err);
+                        res.status(500).json({ message: "Database error", error: err.message });
                     });
                 }
 
-                // 5. Commit (Save everything permanently)
-                db.commit(err => {
+                const newOrderId = result.insertId;
+
+                // 4. NEW STEP: Insert into ORDER_ITEMS table (For Kitchen)
+                if (!items || items.length === 0) {
+                    return connection.rollback(() => {
+                        connection.release();
+                        res.status(400).json({ message: "Order must have items" });
+                    });
+                }
+
+                // Map the items to array of arrays: [[orderId, menuId, quantity], ...]
+                // We use 'item.menuId' because that's what your React frontend sends
+                const orderItemsValues = items.map(item => [
+                    newOrderId,
+                    item.menuId,
+                    item.quantity
+                ]);
+
+                const sqlItems = `INSERT INTO order_items (order_id, menu_id, quantity) VALUES ?`;
+
+                connection.query(sqlItems, [orderItemsValues], (err) => {
                     if (err) {
-                        return db.rollback(() => {
-                            res.status(500).json({ message: "Commit failed" });
+                        return connection.rollback(() => {
+                            connection.release();
+                            console.error("Error inserting order items:", err);
+                            res.status(500).json({ message: "Failed to save order items detail", error: err.message });
                         });
                     }
 
-                    // Success Response (Matches your original format)
-                    res.status(201).json({ 
-                        message: "Order placed successfully", 
-                        orderId: newOrderId,
-                        waiterId: waiterId 
+                    // 5. Commit (Save everything permanently)
+                    connection.commit(err => {
+                        if (err) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                res.status(500).json({ message: "Commit failed" });
+                            });
+                        }
+
+                        connection.release();
+
+                        // Success Response (Matches your original format)
+                        res.status(201).json({
+                            message: "Order placed successfully",
+                            orderId: newOrderId,
+                            waiterId: waiterId
+                        });
                     });
                 });
             });
