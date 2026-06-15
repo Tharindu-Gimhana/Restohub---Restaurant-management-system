@@ -47,7 +47,7 @@ const AdminOverview = ({ user }) => {
           { label: 'Total Revenue', value: `${currency} 12,450`, icon: DollarSign, color: 'bg-green-500' },
           { label: 'Total Orders', value: '1,240', icon: ShoppingBag, color: 'bg-indigo-500' },
           { label: 'Active Staff', value: '8', icon: Users, color: 'bg-orange-500' },
-          { label: 'Updated Growth', value: '+12%', icon: TrendingUp, color: 'bg-blue-500' },
+          { label: 'Growth', value: '+12%', icon: TrendingUp, color: 'bg-blue-500' },
         ].map((stat, index) => (
           <div key={index} className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
             <div className={`p-3 rounded-lg ${stat.color} text-white`}>
