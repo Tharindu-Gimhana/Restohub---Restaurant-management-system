@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../services/db';
-import { PlusCircle, Clock, MinusCircle } from 'lucide-react';
+import { PlusCircle, Clock, MinusCircle, RefreshCw } from 'lucide-react'; 
 import { useOrderContext } from '../Context/OrderContext';
 import ActiveOrderCard from './ActiveOrderCard';
+import { io } from 'socket.io-client';
 
 const WaiterDashboard = ({ user }) => {
   const [orders, setOrders] = useState([]);
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('orders'); 
-  const [editingOrderId, setEditingOrderId] = useState(null); // NEW: Track which order is being edited
+  const [editingOrderId, setEditingOrderId] = useState(null); 
   
   // Grab controls from Context
   const { 
@@ -33,8 +34,33 @@ const WaiterDashboard = ({ user }) => {
   // New Order State
   const [newOrder, setNewOrder] = useState({
     tableNumber: '',
-    items: {} // { menuId: quantity }
+    items: {} 
   });
+
+  // --- NEW: SOCKET.IO LISTENER ---
+  useEffect(() => {
+    // Determine the base URL safely to prevent build crashes
+    const getBaseUrl = () => {
+      try {
+        return (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000').replace('/api', '');
+      } catch (e) {
+        return 'http://localhost:5000';
+      }
+    };
+
+    const socketUrl = getBaseUrl();
+    const socket = io(socketUrl);
+    
+    // Listen for the specific signal from the backend
+    socket.on('order_updated', () => {
+      console.log("Real-time update received! Fetching fresh data...");
+      fetchData();
+    });
+
+    // Cleanup connection when leaving the page
+    return () => socket.disconnect();
+  }, []);
+  // -------------------------------
 
   const fetchData = async () => {
     setLoading(true);
@@ -44,9 +70,15 @@ const WaiterDashboard = ({ user }) => {
         db.getOrders()
       ]);
       setMenu(menuData);
+      
+      // THE FIX: Filter out ONLY 'PAID' and 'UNPAID'. Keep everything else!
       const activeOrders = Array.isArray(ordersData)
-        ? ordersData.filter(order => ['PENDING', 'COOKING', 'READY'].includes(String(order.status).toUpperCase()))
+        ? ordersData.filter(order => {
+            const status = String(order.status).toUpperCase();
+            return status !== 'PAID' && status !== 'UNPAID';
+          })
         : [];
+        
       setOrders(activeOrders);
     } catch (e) {
       console.error("Error loading waiter data:", e);
@@ -58,35 +90,28 @@ const WaiterDashboard = ({ user }) => {
   // 1. Load Data
   useEffect(() => {
     fetchData();
-    
   }, []);
 
-
-  // Add this inside WaiterDashboard component
-const handleStartUpdate = (order) => {
-    console.log("Editing Order:", order.id); // Debug Log
-
-    setEditingOrderId(order.id); // Remember which order we are editing
-    // Lock table number & clear items so you can add NEW ones
+  const handleStartUpdate = (order) => {
+    console.log("Editing Order:", order.id); 
+    setEditingOrderId(order.id); 
     setNewOrder({ 
        tableNumber: order.table_number, 
        items: {} 
     });
-    setActiveTab('new'); // Switch view
-    setIsOrderMode(true); // Turn on Sidebar
-};
+    setActiveTab('new'); 
+    setIsOrderMode(true); 
+  };
 
-  // 2. EXTRACT CATEGORIES (Fixed - No Loop!)
+  // 2. EXTRACT CATEGORIES 
   useEffect(() => {
     if (menu.length > 0) {
       const uniqueCats = [...new Set(menu.map(item => {
         return (item.category || 'Other').trim(); 
       }))];
 
-      console.log("Sending categories to Sidebar:", uniqueCats);
       setCategories(uniqueCats);
 
-      // Only set default if we are currently on 'All' or invalid category
       if (selectedCategory === 'All' || !uniqueCats.includes(selectedCategory)) {
          if (uniqueCats.length > 0) {
             setSelectedCategory(uniqueCats[0]);
@@ -94,8 +119,7 @@ const handleStartUpdate = (order) => {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [menu, setCategories]); // <--- REMOVED selectedCategory dependencies to fix the loop!
-
+  }, [menu, setCategories]); 
 
   // 3. FILTER FOODS
   const filteredItems = useMemo(() => {
@@ -105,7 +129,6 @@ const handleStartUpdate = (order) => {
     });
   }, [selectedCategory, menu]);
 
-
   // Helper: Calculate Total
   const calculateTotal = () => {
     return Object.entries(newOrder.items).reduce((total, [id, qty]) => {
@@ -114,120 +137,74 @@ const handleStartUpdate = (order) => {
     }, 0);
   };
 
-  // Helper: Place Order
- { /* const handlePlaceOrder = async () => {
-    if (!newOrder.tableNumber || Object.keys(newOrder.items).length === 0) return;
-    try {
-      const orderData = {
-        tableNumber: newOrder.tableNumber,
-        items: Object.entries(newOrder.items).map(([id, qty]) => ({
-          menuId: parseInt(id),
-          quantity: qty
-        })),
-        total: calculateTotal()
-      };
-      await db.saveOrder(orderData);
-      setNewOrder({ tableNumber: '', items: {} });
-      setActiveTab('orders');
-      setIsOrderMode(false); // Turn off sidebar mode
-      const updatedOrders = await db.getOrders();
-      setOrders(updatedOrders);
-      alert('Order placed successfully!');
-    } catch (e) {
-      alert('Failed to place order');
-    }
-  };   */}
-
-
   const handleSubmit = async () => {
-    // 1. Validation (Don't submit empty orders)
     if (!newOrder.tableNumber || Object.keys(newOrder.items).length === 0) {
        alert("Please select items and a table number.");
        return;
     }
 
     try {
-       // --- SCENARIO A: UPDATING AN EXISTING ORDER ---
-       // This runs ONLY if you clicked the "Edit" button
        if (editingOrderId) {
-          console.log("Updating Order ID:", editingOrderId); // Debug Log
-
           const updateData = {
              orderId: editingOrderId,
-             // Convert items object { "101": 2 } -> Array [{ menuId: 101, quantity: 2 }]
              items: Object.entries(newOrder.items).map(([id, qty]) => ({ 
                  menuId: parseInt(id), 
                  quantity: qty 
              })),
-             addedTotal: calculateTotal() // <--- ADD THIS LINE! This calculates the price of the new items
+             addedTotal: calculateTotal() 
           };
-
-          // Call the UPDATE function (adds items to existing order)
           await db.updateOrder(updateData);
-          alert("Order Updated Successfully!!!!!!");
+          alert("Order Updated Successfully!");
 
        } else {
-          // --- SCENARIO B: CREATING A NEW ORDER ---
-          // This runs if you clicked "New Order"
           const orderData = {
              tableNumber: newOrder.tableNumber,
              items: Object.entries(newOrder.items).map(([id, qty]) => ({ 
                  menuId: parseInt(id), 
                  quantity: qty 
              })),
-             total: calculateTotal() // Helper function to calc total
+             total: calculateTotal() 
           };
-          
-          // Call the CREATE function
           await db.saveOrder(orderData);
           alert("New Order Placed!");
        }
 
-       // --- CLEANUP (Reset Form) ---
-       setEditingOrderId(null); // IMPORTANT: Clear the edit ID
+       // CLEANUP & REDIRECT TO ACTIVE ORDERS
+       setEditingOrderId(null); 
        setNewOrder({ tableNumber: '', items: {} });
-       setActiveTab('orders'); // Go back to the list
+       setActiveTab('orders'); 
        setIsOrderMode(false);
        
        // Refresh List to see changes
-       const updatedOrders = await db.getOrders();
-       setOrders(updatedOrders);
+       fetchData(); // Using fetchData here keeps logic perfectly centralized
 
     } catch (e) { 
        console.error(e);
        alert(e.message || 'Action failed'); 
     }
-};
+  };
 
-
-
-const handleCancel = async (orderId) => {
+  const handleCancel = async (orderId) => {
     if(!window.confirm("Are you sure you want to cancel this order?")) return;
-
     try {
-       // USE THE NEW DB FUNCTION
        await db.cancelOrder(orderId);
-
-       // Optimistic Update (Remove from screen immediately)
        setOrders(prev => prev.filter(o => o.id !== orderId));
-       
     } catch(e) { 
-       alert(e.message); // Shows "Kitchen has already started" if 403
+       alert(e.message); 
     }
-};
+  };
 
-const handleServe = async (orderId, itemIds) => {
+  const handleServe = async (orderId, itemIds) => {
     try {
       await db.updateOrderItemStatus(orderId, itemIds, 'SERVED');
       fetchData();
     } catch (e) {
       alert(e.message || 'Failed to serve items');
     }
-};
+  };
 
-const handleCheckout = async (orderId) => {
+  const handleCheckout = async (orderId) => {
     if (!window.confirm('Send this order to cashier?')) return;
-
     try {
       setOrders(prev => prev.filter(order => order.id !== orderId));
       await db.updateOrderStatus(orderId, 'UNPAID');
@@ -236,53 +213,61 @@ const handleCheckout = async (orderId) => {
       fetchData();
       alert(e.message || 'Failed to checkout order');
     }
-};
+  };
 
   if (loading) return <div className="p-8 text-center">Loading Service Dashboard...</div>;
 
   return (
     <div className="space-y-6">
-      {/* Tab Switcher */}
-<div className="flex gap-4 border-b border-slate-200 pb-4">
-  <button 
-    onClick={() => { setActiveTab('orders'); setIsOrderMode(false); }}
-    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-      activeTab === 'orders' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-    }`}
-  >
-    <Clock size={18} /> Active Orders
-  </button>
+      {/* --- UPDATED: Tab Switcher with Refresh Button --- */}
+      <div className="flex justify-between items-center border-b border-slate-200 pb-4">
+        
+        {/* Left Side: Tabs */}
+        <div className="flex gap-4">
+          <button 
+            onClick={() => { setActiveTab('orders'); setIsOrderMode(false); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+              activeTab === 'orders' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Clock size={18} /> Active Orders
+          </button>
 
-  {/* FIX THIS BUTTON: Clear state when clicking New Order */}
-  <button 
-    onClick={() => { 
-        setEditingOrderId(null); // <--- FORGET the order we were editing
-        setNewOrder({ tableNumber: '', items: {} }); // Clear the form
-        setActiveTab('new'); 
-        setIsOrderMode(true); 
-    }}
-    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-      activeTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-    }`}
-  >
-    <PlusCircle size={18} /> New Order
-  </button>
-</div>
+          <button 
+            onClick={() => { 
+                setEditingOrderId(null); 
+                setNewOrder({ tableNumber: '', items: {} }); 
+                setActiveTab('new'); 
+                setIsOrderMode(true); 
+            }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+              activeTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <PlusCircle size={18} /> New Order
+          </button>
+        </div>
 
+        {/* Right Side: Manual Refresh Button */}
+        <button
+          onClick={fetchData}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors font-medium shadow-sm"
+          title="Refresh Orders"
+        >
+          <RefreshCw size={18} /> Refresh
+        </button>
 
+      </div>
 
-{/* VIEW 1: ACTIVE ORDERS (Updated with Component) */}
+      {/* VIEW 1: ACTIVE ORDERS */}
       {activeTab === 'orders' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          
-          {/* 1. EMPTY STATE (Kept exactly as you had it) */}
           {orders.length === 0 ? (
             <div className="col-span-full text-center py-12 text-slate-400 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
                <Clock size={32} className="mx-auto mb-2 opacity-50" />
                <p>No active orders</p>
             </div>
           ) : (
-            /* 2. ORDERS LIST (Now using the Smart Component) */
             orders.map(order => (
               <ActiveOrderCard 
                  key={order.id} 
@@ -298,11 +283,9 @@ const handleCheckout = async (orderId) => {
         </div>
       )}
 
-
       {/* NEW ORDER VIEW */}
       {activeTab === 'new' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[calc(100vh-200px)] overflow-hidden">
-           
            {/* LEFT SIDE: FOOD GRID */}
            <div className="md:col-span-2 flex flex-col h-full overflow-hidden">
               <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
@@ -316,9 +299,7 @@ const handleCheckout = async (orderId) => {
 
               <div className="grid grid-cols-2 gap-3 overflow-y-auto pb-20 pr-2">
                  {filteredItems.map(item => {
-                    // Check if this item is in the cart
                     const quantity = newOrder.items[item.id] || 0;
-
                     return (
                       <div 
                         key={item.id} 
@@ -326,15 +307,12 @@ const handleCheckout = async (orderId) => {
                           quantity > 0 ? 'border-indigo-500 bg-indigo-50 shadow-md' : 'bg-white border-slate-200'
                         }`}
                       >
-                         {/* Food Info */}
                          <div className="flex justify-between items-start">
                             <div>
                                <p className="font-bold text-slate-800 leading-tight">{item.name}</p>
                                <p className="text-sm text-slate-500 mt-1">{currency}{item.price}</p>
                             </div>
                          </div>
-
-                         {/* +/- CONTROLS RESTORED HERE */}
                          <div className="flex items-center justify-end gap-3 mt-auto">
                             {quantity > 0 && (
                               <button 
@@ -344,7 +322,7 @@ const handleCheckout = async (orderId) => {
                                    if (currentQty > 1) {
                                       newItems[item.id] = currentQty - 1;
                                    } else {
-                                      delete newItems[item.id]; // Remove if 0
+                                      delete newItems[item.id]; 
                                    }
                                    return { ...prev, items: newItems };
                                 })}
@@ -419,11 +397,11 @@ const handleCheckout = async (orderId) => {
               </div>
 
               <button 
-                    onClick={handleSubmit} // <--- Change to the smart function
+                    onClick={handleSubmit} 
                     disabled={!newOrder.tableNumber || Object.keys(newOrder.items).length === 0}
                     className={`w-full py-3 rounded-xl font-bold transition-colors text-white ${
                       editingOrderId 
-                        ? 'bg-orange-600 hover:bg-orange-700' // Visual clue for Update
+                        ? 'bg-orange-600 hover:bg-orange-700' 
                         : 'bg-indigo-600 hover:bg-indigo-700'
                     }`}
                   >
