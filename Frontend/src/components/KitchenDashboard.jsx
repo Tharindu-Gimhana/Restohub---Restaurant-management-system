@@ -51,8 +51,7 @@ const KitchenDashboard = () => {
 
   useEffect(() => {
     fetchData(); // Initial Load
-    const interval = setInterval(fetchData, 5000); // Auto-refresh
-    return () => clearInterval(interval);
+    
   }, []);
 
   // --- Update Status Helper ---
