@@ -55,6 +55,12 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const itemStatusPriority = {
+    READY: 0,
+    SERVED: 1,
+    PENDING: 2
+};
+
 
 
 const http = require('http');
@@ -251,15 +257,19 @@ app.get('/api/orders', authenticateToken, (req, res) => {
     const restaurantId = req.user.restaurantId;
     console.log("User in Request:", req.user);
 
-    // 1. UPDATED SQL: Grab both timestamps and alias them to prevent collision
+    // 1. UPDATED SQL: Grab item-level status so the UI can show progress without reordering cards
     const query = `
-        SELECT o.id, o.table_number, o.status, o.total, o.created_at AS order_created, 
-               m.name as menu_name, oi.quantity, oi.menu_id, oi.created_at AS item_created
+         SELECT o.id, o.table_number, o.status, o.total, o.created_at AS order_created, 
+               COALESCE(NULLIF(u.name, ''), NULLIF(u.username, ''), CONCAT('ID #', o.waiter_id), 'N/A') AS waiter_name,
+             m.name as menu_name, m.price AS item_price,
+             oi.id AS item_id, oi.quantity, oi.menu_id, oi.status AS item_status,
+               oi.created_at AS item_created, oi.updated_at AS item_updated
         FROM orders o 
         LEFT JOIN order_items oi ON o.id = oi.order_id 
         LEFT JOIN menu m ON oi.menu_id = m.id
+         LEFT JOIN users u ON o.waiter_id = u.id
         WHERE o.restaurant_id = ?
-        ORDER BY o.created_at DESC
+        ORDER BY o.created_at ASC, oi.created_at ASC
     `;
 
     db.query(query, [restaurantId], (err, results) => {
@@ -279,6 +289,7 @@ app.get('/api/orders', authenticateToken, (req, res) => {
                     table_number: row.table_number,
                     status: row.status,
                     total: row.total,
+                    waiter_name: row.waiter_name || 'N/A',
                     created_at: row.order_created, // The Main Order Time
                     items: []
                 };
@@ -287,16 +298,33 @@ app.get('/api/orders', authenticateToken, (req, res) => {
             // If this row has an item, push it into the items array
             if (row.menu_id) {
                 ordersMap[row.id].items.push({
+                    id: row.item_id,
                     menuId: row.menu_id,
                     name: row.menu_name,
                     quantity: row.quantity,
-                    created_at: row.item_created // THE MISSING PIECE: The Item Time!
+                    price: row.item_price,
+                    subtotal: Number(row.item_price || 0) * Number(row.quantity || 0),
+                    status: row.item_status || 'PENDING',
+                    created_at: row.item_created, // THE MISSING PIECE: The Item Time!
+                    updated_at: row.item_updated || row.item_created
                 });
             }
         });
 
+        const structuredOrders = Object.values(ordersMap).map(order => ({
+            ...order,
+            items: order.items.sort((a, b) => {
+                const statusDiff = (itemStatusPriority[a.status] ?? 99) - (itemStatusPriority[b.status] ?? 99);
+                if (statusDiff !== 0) return statusDiff;
+
+                const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+                const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+                return timeB - timeA;
+            })
+        }));
+
         // Convert the map object back into an array to send to the frontend
-        res.json(Object.values(ordersMap));
+        res.json(structuredOrders);
     });
 });
 
@@ -372,7 +400,7 @@ app.post('/api/orders', authenticateToken, (req, res) => {
             // 3. Insert into ORDERS table 
             // We KEEP the 'items' column with JSON string so your Waiter App doesn't break!
             const itemsString = JSON.stringify(items);
-            const status = 'pending';
+            const status = 'PENDING';
 
             const sqlOrder = `
                 INSERT INTO orders 
@@ -501,12 +529,29 @@ app.post('/api/orders/add-items', (req, res) => {
         return res.status(400).json({ message: "No items provided" });
     }
 
-    // Prepare data for Bulk Insert
-    const values = items.map(item => [orderId, item.menuId, item.quantity]);
-    const insertQuery = 'INSERT INTO order_items (order_id, menu_id, quantity) VALUES ?';
+    const orderStatusQuery = 'SELECT status FROM orders WHERE id = ?';
 
-    // QUERY 1: Insert the new foods into order_items
-    db.query(insertQuery, [values], (err, result) => {
+    db.query(orderStatusQuery, [orderId], (statusErr, statusResults) => {
+        if (statusErr) {
+            console.error(statusErr);
+            return res.status(500).json({ message: "Database error checking order status" });
+        }
+
+        if (statusResults.length === 0) {
+            return res.status(404).json({ message: "Order not found" });
+        }
+
+        const currentOrderStatus = String(statusResults[0].status || '').toUpperCase();
+        if (['BILLING', 'PAID', 'CANCELLED'].includes(currentOrderStatus)) {
+            return res.status(403).json({ message: 'Cannot add items after checkout has started' });
+        }
+
+        // Prepare data for Bulk Insert
+        const values = items.map(item => [orderId, item.menuId, item.quantity, 'PENDING']);
+        const insertQuery = 'INSERT INTO order_items (order_id, menu_id, quantity, status) VALUES ?';
+
+        // QUERY 1: Insert the new foods into order_items
+        db.query(insertQuery, [values], (err) => {
         if (err) {
             console.error(err);
             return res.status(500).json({ message: "Database error inserting items" });
@@ -514,9 +559,10 @@ app.post('/api/orders/add-items', (req, res) => {
 
         // QUERY 2: Update the total price in the orders table
         // We use "total = total + ?" to safely add the new amount to whatever the current bill is
-        const updateQuery = 'UPDATE orders SET total = total + ? WHERE id = ?';
+        const updateQuery = 'UPDATE orders SET total = total + ?, status = ? WHERE id = ?';
+        const nextStatus = currentOrderStatus === 'READY' ? 'COOKING' : currentOrderStatus;
         
-        db.query(updateQuery, [addedTotal, orderId], (err, updateResult) => {
+        db.query(updateQuery, [addedTotal, nextStatus, orderId], (err) => {
             if (err) {
                 console.error(err);
                 return res.status(500).json({ message: "Database error updating total" });
@@ -533,41 +579,150 @@ app.post('/api/orders/add-items', (req, res) => {
         });
     });
 });
+});
 
 
-
-// 4. UPDATE ORDER STATUS (Kitchen Action)
-app.patch('/api/orders/:id/status', (req, res) => {
+// 3B. UPDATE ORDER ITEM STATUS (Kitchen / Waiter Action)
+app.patch('/api/orders/:id/items/status', (req, res) => {
     const orderId = req.params.id;
-    const { status } = req.body; // The frontend should be sending { "status": "COOKING" }
+    const { itemIds, status } = req.body;
 
-    if (!status) {
-        return res.status(400).json({ message: "Status is required" });
+    if (!Array.isArray(itemIds) || itemIds.length === 0 || !status) {
+        return res.status(400).json({ message: 'Item IDs and status are required' });
     }
 
-    // Update the database
-    const query = 'UPDATE orders SET status = ? WHERE id = ?';
+    const normalizedStatus = String(status).toUpperCase();
+    if (!['READY', 'SERVED'].includes(normalizedStatus)) {
+        return res.status(400).json({ message: 'Invalid item status' });
+    }
 
-    db.query(query, [status, orderId], (err, result) => {
+    const ids = [...new Set(itemIds.map(itemId => parseInt(itemId, 10)).filter(Number.isInteger))];
+    if (ids.length === 0) {
+        return res.status(400).json({ message: 'Valid item IDs are required' });
+    }
+
+    const placeholders = ids.map(() => '?').join(', ');
+    const updateQuery = `UPDATE order_items SET status = ? WHERE order_id = ? AND id IN (${placeholders})`;
+
+    db.query(updateQuery, [normalizedStatus, orderId, ...ids], (err, result) => {
         if (err) {
-            console.error("Error updating status:", err);
-            return res.status(500).json({ message: "Database Error" });
+            console.error(err);
+            return res.status(500).json({ message: 'Failed to update order items' });
         }
 
         if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "Order not found" });
+            return res.status(404).json({ message: 'No matching order items found' });
         }
 
-        // --- THE INTEGRATION MAGIC (Sockets) ---
-        // Tell everyone (Waiters) that the status changed so their UI updates instantly
-        if (typeof io !== 'undefined') {
-            io.emit('order_status_updated', { orderId: parseInt(orderId), status });
-        } else {
-            req.app.get('socketio').emit('order_status_updated', { orderId: parseInt(orderId), status });
+        if (normalizedStatus !== 'READY') {
+            if (typeof io !== 'undefined') {
+                io.emit('order_items_updated', { orderId: parseInt(orderId, 10) });
+            } else {
+                req.app.get('socketio').emit('order_items_updated', { orderId: parseInt(orderId, 10) });
+            }
+
+            return res.json({ success: true, message: 'Order items updated successfully' });
         }
 
-        res.json({ success: true, message: `Order status updated to ${status}` });
+        const pendingQuery = 'SELECT COUNT(*) AS pendingCount FROM order_items WHERE order_id = ? AND status = "PENDING"';
+        db.query(pendingQuery, [orderId], (pendingErr, pendingResults) => {
+            if (pendingErr) {
+                console.error(pendingErr);
+                return res.status(500).json({ message: 'Failed to verify item readiness' });
+            }
+
+            const pendingCount = pendingResults?.[0]?.pendingCount || 0;
+            const nextOrderStatus = pendingCount === 0 ? 'READY' : 'COOKING';
+
+            db.query('UPDATE orders SET status = ? WHERE id = ?', [nextOrderStatus, orderId], (orderErr) => {
+                if (orderErr) {
+                    console.error(orderErr);
+                    return res.status(500).json({ message: 'Failed to sync order status' });
+                }
+
+                if (typeof io !== 'undefined') {
+                    io.emit('order_items_updated', { orderId: parseInt(orderId, 10), status: nextOrderStatus });
+                } else {
+                    req.app.get('socketio').emit('order_items_updated', { orderId: parseInt(orderId, 10), status: nextOrderStatus });
+                }
+
+                return res.json({
+                    success: true,
+                    message: 'Order items updated successfully',
+                    orderStatus: nextOrderStatus
+                });
+            });
+        });
     });
+});
+
+
+
+// 4. UPDATE ORDER STATUS (Kitchen / Cashier Action)
+app.patch('/api/orders/:id/status', (req, res) => {
+    const orderId = req.params.id;
+    const normalizedStatus = String(req.body.status || '').toUpperCase();
+
+    if (!normalizedStatus) {
+        return res.status(400).json({ message: 'Status is required' });
+    }
+
+    const updateStatus = (finalStatus) => {
+        db.query('UPDATE orders SET status = ? WHERE id = ?', [finalStatus, orderId], (err, result) => {
+            if (err) {
+                console.error('Error updating status:', err);
+                return res.status(500).json({ message: 'Database Error' });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ message: 'Order not found' });
+            }
+
+            if (typeof io !== 'undefined') {
+                io.emit('order_status_updated', { orderId: parseInt(orderId, 10), status: finalStatus });
+            } else {
+                req.app.get('socketio').emit('order_status_updated', { orderId: parseInt(orderId, 10), status: finalStatus });
+            }
+
+            return res.json({ success: true, message: `Order status updated to ${finalStatus}` });
+        });
+    };
+
+    if (normalizedStatus === 'PAID') {
+        db.query('SELECT status FROM orders WHERE id = ?', [orderId], (billingErr, billingResults) => {
+            if (billingErr) {
+                console.error('Error checking order state:', billingErr);
+                return res.status(500).json({ message: 'Database Error' });
+            }
+
+            if (billingResults.length === 0) {
+                return res.status(404).json({ message: 'Order not found' });
+            }
+
+            const currentStatus = String(billingResults[0].status || 'PENDING').trim().toUpperCase() || 'PENDING';
+            if (!['PENDING', 'BILLING', 'UNPAID'].includes(currentStatus)) {
+                return res.status(403).json({ message: `Order must be UNPAID before payment. Current status: ${currentStatus}` });
+            }
+
+            db.query('SELECT COUNT(*) AS remainingCount FROM order_items WHERE order_id = ? AND status != "SERVED"', [orderId], (remainingErr, remainingResults) => {
+                if (remainingErr) {
+                    console.error('Error checking served items:', remainingErr);
+                    return res.status(500).json({ message: 'Database Error' });
+                }
+
+                const remainingCount = remainingResults?.[0]?.remainingCount || 0;
+                if (remainingCount > 0) {
+                    return res.status(400).json({ message: 'All items must be served before checkout' });
+                }
+
+                updateStatus('PAID');
+            });
+        });
+
+        return;
+    }
+
+    updateStatus(normalizedStatus);
 });
 
 

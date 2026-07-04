@@ -36,24 +36,30 @@ const WaiterDashboard = ({ user }) => {
     items: {} // { menuId: quantity }
   });
 
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [menuData, ordersData] = await Promise.all([
+        db.getMenu(),
+        db.getOrders()
+      ]);
+      setMenu(menuData);
+      const activeOrders = Array.isArray(ordersData)
+        ? ordersData.filter(order => ['PENDING', 'COOKING', 'READY'].includes(String(order.status).toUpperCase()))
+        : [];
+      setOrders(activeOrders);
+    } catch (e) {
+      console.error("Error loading waiter data:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // 1. Load Data
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      try {
-        const [menuData, ordersData] = await Promise.all([
-          db.getMenu(),
-          db.getOrders()
-        ]);
-        setMenu(menuData);
-        setOrders(Array.isArray(ordersData) ? ordersData : []);
-      } catch (e) {
-        console.error("Error loading waiter data:", e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadData();
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
   }, []);
 
 
@@ -211,6 +217,28 @@ const handleCancel = async (orderId) => {
     }
 };
 
+const handleServe = async (orderId, itemIds) => {
+    try {
+      await db.updateOrderItemStatus(orderId, itemIds, 'SERVED');
+      fetchData();
+    } catch (e) {
+      alert(e.message || 'Failed to serve items');
+    }
+};
+
+const handleCheckout = async (orderId) => {
+    if (!window.confirm('Send this order to cashier?')) return;
+
+    try {
+      setOrders(prev => prev.filter(order => order.id !== orderId));
+      await db.updateOrderStatus(orderId, 'UNPAID');
+      fetchData();
+    } catch (e) {
+      fetchData();
+      alert(e.message || 'Failed to checkout order');
+    }
+};
+
   if (loading) return <div className="p-8 text-center">Loading Service Dashboard...</div>;
 
   return (
@@ -263,7 +291,8 @@ const handleCancel = async (orderId) => {
                  currency={currency}
                  onCancel={handleCancel}       
                  onAddItems={handleStartUpdate} 
-                 onServe={(id) => console.log("Serving", id)} // We will implement serve logic later
+                 onServe={handleServe}
+                 onCheckout={handleCheckout}
               />
             ))
           )}

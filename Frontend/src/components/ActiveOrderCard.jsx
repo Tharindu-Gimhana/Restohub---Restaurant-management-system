@@ -1,42 +1,48 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Clock, CheckCircle, XCircle, Plus, Edit3, Lock, ChefHat } from 'lucide-react';
 
-const ActiveOrderCard = ({ order, currency, onCancel, onAddItems, onServe }) => {
+const ActiveOrderCard = ({ order, currency, onCancel, onAddItems, onServe, onCheckout }) => {
+   const [selectedReadyItems, setSelectedReadyItems] = useState([]);
+   const isBilling = order.status === 'BILLING';
+   const isPaid = order.status === 'PAID';
   const isReady = order.status === 'READY';
   const isCooking = order.status === 'COOKING';
   const isPending = order.status === 'PENDING';
 
-  // --- BATCHING LOGIC ---
-  // Groups items based on time difference (2 minutes rule)
-  const groupItemsByBatch = (items) => {
-    if (!items || items.length === 0) return {};
-    
-    // Sort oldest first
-    const sorted = [...items].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-    
-    // Safety: If no created_at, treat all as one batch
-    if (!sorted[0]?.created_at) return { 'Items': sorted };
+   useEffect(() => {
+      setSelectedReadyItems([]);
+   }, [order.id, order.items]);
 
-    const baseTime = new Date(sorted[0].created_at).getTime();
-    const batches = { 'Original Order': [] };
+   const sortedItems = useMemo(() => {
+      const statusWeight = { READY: 0, SERVED: 1, PENDING: 2 };
+      return [...(order.items || [])].sort((a, b) => {
+         const statusDiff = (statusWeight[a.status] ?? 99) - (statusWeight[b.status] ?? 99);
+         if (statusDiff !== 0) return statusDiff;
 
-    sorted.forEach(item => {
-      const itemTime = new Date(item.created_at).getTime();
-      // If item added > 2 mins (120000ms) after start -> It's an update
-      if (itemTime - baseTime > 120000) {
-        const timeString = new Date(item.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-        const batchName = `Update (${timeString})`;
-        if (!batches[batchName]) batches[batchName] = [];
-        batches[batchName].push(item);
-      } else {
-        batches['Original Order'].push(item);
-      }
-    });
-    return batches;
-  };
+         const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+         const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+         return timeB - timeA;
+      });
+   }, [order.items]);
 
-  const batches = groupItemsByBatch(order.items);
-  const hasUpdates = Object.keys(batches).length > 1;
+   const readyItems = sortedItems.filter(item => item.status === 'READY');
+   const servedItems = sortedItems.filter(item => item.status === 'SERVED');
+   const pendingItems = sortedItems.filter(item => item.status !== 'READY' && item.status !== 'SERVED');
+   const allItemsServed = sortedItems.length > 0 && sortedItems.every(item => item.status === 'SERVED');
+
+   const toggleReadyItem = (itemId) => {
+      setSelectedReadyItems(prev => (
+         prev.includes(itemId)
+            ? prev.filter(id => id !== itemId)
+            : [...prev, itemId]
+      ));
+   };
+
+   const serveSelectedItems = () => {
+      if (selectedReadyItems.length === 0 || !onServe) return;
+      onServe(order.id, selectedReadyItems);
+      setSelectedReadyItems([]);
+   };
 
   return (
     <div className={`bg-white rounded-xl border shadow-sm flex flex-col h-full transition-all duration-300 ${
@@ -47,14 +53,14 @@ const ActiveOrderCard = ({ order, currency, onCancel, onAddItems, onServe }) => 
       
       {/* HEADER */}
       <div className={`p-4 border-b flex justify-between items-start ${
-          isReady ? 'bg-green-50' : isCooking ? 'bg-orange-50' : 'bg-slate-50'
+           isReady ? 'bg-green-50' : isCooking ? 'bg-orange-50' : isBilling ? 'bg-indigo-50' : 'bg-slate-50'
       }`}>
         <div>
            <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Table</span>
-              {hasUpdates && (
-                  <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
-                    UPDATED
+                     {readyItems.length > 0 && (
+                           <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse">
+                              {readyItems.length} READY
                   </span>
               )}
            </div>
@@ -65,6 +71,7 @@ const ActiveOrderCard = ({ order, currency, onCancel, onAddItems, onServe }) => 
            <span className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 shadow-sm ${
               isReady ? 'bg-green-100 text-green-700' : 
               isCooking ? 'bg-orange-100 text-orange-700' :
+              isBilling ? 'bg-indigo-100 text-indigo-700' :
               'bg-slate-200 text-slate-600'
            }`}>
               {isReady ? <CheckCircle size={14}/> : isCooking ? <ChefHat size={14}/> : <Clock size={14}/>}
@@ -78,26 +85,76 @@ const ActiveOrderCard = ({ order, currency, onCancel, onAddItems, onServe }) => 
 
       {/* BODY (SCROLLABLE BATCHES) */}
       <div className="flex-1 p-4 space-y-4 overflow-y-auto max-h-64 custom-scrollbar">
-         {Object.entries(batches).map(([batchName, batchItems]) => (
-            <div key={batchName} className="animate-fadeIn">
-               <div className="flex justify-between items-end border-b border-slate-100 pb-1 mb-2">
-                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                   {batchName}
+         {readyItems.length > 0 && !isBilling && !isPaid && (
+            <div>
+               <div className="flex justify-between items-end border-b border-emerald-100 pb-1 mb-2">
+                 <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">
+                   Ready to serve
                  </p>
+                 <span className="text-[10px] text-emerald-500 font-bold">Select items to serve</span>
                </div>
-               {batchItems.map((item, idx) => (
-                  <div key={idx} className="flex justify-between text-sm mb-2 last:mb-0">
-                     <span className="text-slate-700 font-medium">
-                        <span className="inline-block font-bold text-slate-900 bg-slate-100 px-1.5 rounded text-xs mr-2 w-6 text-center">
+               {readyItems.map((item) => {
+                  const isSelected = selectedReadyItems.includes(item.id);
+                  return (
+                     <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => toggleReadyItem(item.id)}
+                        className={`w-full flex justify-between items-center text-sm mb-2 last:mb-0 p-2 rounded-lg border transition-colors ${
+                          isSelected ? 'bg-emerald-100 border-emerald-400' : 'bg-white border-emerald-100 hover:bg-emerald-50'
+                        }`}
+                     >
+                        <span className="text-slate-800 font-medium flex items-center gap-2">
+                           <CheckCircle size={14} className="text-emerald-600" />
+                           <span className="inline-block font-bold text-emerald-800 bg-emerald-50 px-1.5 rounded text-xs w-6 text-center">
+                              {item.quantity}x
+                           </span>
+                           {item.name}
+                        </span>
+                        <span className="text-[10px] font-bold text-emerald-700">
+                          {isSelected ? 'SELECTED' : 'READY'}
+                        </span>
+                     </button>
+                  );
+               })}
+            </div>
+         )}
+
+         {servedItems.length > 0 && (
+            <div>
+               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Served</p>
+               {servedItems.map((item) => (
+                  <div key={item.id} className="flex justify-between items-center text-sm mb-2 last:mb-0 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                     <span className="text-slate-500 font-medium flex items-center gap-2">
+                        <CheckCircle size={14} className="text-slate-400" />
+                        <span className="inline-block font-bold text-slate-500 bg-slate-100 px-1.5 rounded text-xs mr-1 w-6 text-center">
                             {item.quantity}x
-                        </span> 
+                        </span>
                         {item.name}
                      </span>
-                     <span className="text-xs text-slate-400 tabular-nums">{currency}{item.price}</span>
+                     <span className="text-[10px] font-bold text-slate-500">SERVED</span>
                   </div>
                ))}
             </div>
-         ))}
+         )}
+
+         {pendingItems.length > 0 && (
+            <div>
+               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Waiting</p>
+               {pendingItems.map((item) => (
+                  <div key={item.id} className="flex justify-between items-center text-sm mb-2 last:mb-0 p-2 rounded-lg bg-slate-50 border border-slate-100 opacity-70">
+                     <span className="text-slate-600 font-medium flex items-center gap-2">
+                        <Clock size={14} className="text-slate-400" />
+                        <span className="inline-block font-bold text-slate-600 bg-slate-100 px-1.5 rounded text-xs mr-1 w-6 text-center">
+                            {item.quantity}x
+                        </span>
+                        {item.name}
+                     </span>
+                     <span className="text-[10px] font-bold text-slate-400">PENDING</span>
+                  </div>
+               ))}
+            </div>
+         )}
       </div>
 
       {/* FOOTER */}
@@ -107,38 +164,42 @@ const ActiveOrderCard = ({ order, currency, onCancel, onAddItems, onServe }) => 
              <span className="text-xl font-bold text-slate-800">{currency}{Number(order.total).toFixed(2)}</span>
          </div>
 
-         <div className="grid grid-cols-2 gap-2">
-            {/* 1. CANCEL (Only PENDING) */}
-            {isPending ? (
+         <div className="grid grid-cols-2 gap-2 mb-2">
+            {isPending && (
                <button 
                  onClick={() => onCancel(order.id)}
-                 className="col-span-1 bg-white border border-red-200 text-red-600 hover:bg-red-50 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+                 className="bg-white border border-red-200 text-red-600 hover:bg-red-50 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors"
                >
                  <XCircle size={14} /> Cancel
                </button>
-            ) : (
-               // If Cooking/Ready, Cancel is Locked
-               <button disabled className="col-span-1 bg-slate-100 text-slate-400 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 cursor-not-allowed border border-slate-200">
-                  <Lock size={12} /> Locked
+            )}
+
+            {!isBilling && !isPaid && (
+               <button 
+                 onClick={() => onAddItems(order)}
+                 className="bg-indigo-600 text-white hover:bg-indigo-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors shadow-sm"
+               >
+                 {isPending ? <Edit3 size={14} /> : <Plus size={14} />} 
+                 Add Item
                </button>
             )}
 
-            {/* 2. UPDATE (Allowed unless READY) */}
-            {!isReady ? (
-               <button 
-                 onClick={() => onAddItems(order)}
-                 className="col-span-1 bg-indigo-600 text-white hover:bg-indigo-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors shadow-sm"
+            {!isBilling && !isPaid && readyItems.length > 0 && (
+               <button
+                  onClick={serveSelectedItems}
+                  disabled={selectedReadyItems.length === 0}
+                  className="bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors shadow-sm"
                >
-                 {isPending ? <Edit3 size={14} /> : <Plus size={14} />} 
-                 {isPending ? 'Edit' : 'Add Item'}
+                  <CheckCircle size={14} /> Serve Selected
                </button>
-            ) : (
-               // If Ready -> Serve
-               <button 
-                 onClick={() => onServe(order.id)}
-                 className="col-span-1 bg-green-600 text-white hover:bg-green-700 py-2 rounded-lg text-xs font-bold shadow-sm"
+            )}
+
+            {!isBilling && !isPaid && allItemsServed && (
+               <button
+                  onClick={() => onCheckout && onCheckout(order.id)}
+                  className="bg-slate-900 text-white hover:bg-slate-800 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors shadow-sm"
                >
-                  Mark Served
+                  <ChefHat size={14} /> Checkout
                </button>
             )}
          </div>

@@ -9,6 +9,7 @@ export const OrderStatus = {
   PENDING: 'PENDING',
   COOKING: 'COOKING',
   READY: 'READY',
+  BILLING: 'BILLING',
   PAID: 'PAID',
   CANCELLED: 'CANCELLED'
 };

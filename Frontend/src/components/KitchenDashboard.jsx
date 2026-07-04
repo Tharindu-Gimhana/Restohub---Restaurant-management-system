@@ -83,7 +83,7 @@ const KitchenDashboard = () => {
             <KitchenOrderCard 
                key={order.id} 
                order={order} 
-               onUpdateStatus={updateStatus} 
+               onRefresh={fetchData} 
             />
           ))
         ) : (

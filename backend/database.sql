@@ -61,7 +61,7 @@ CREATE TABLE orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     restaurant_id INT NOT NULL,
     table_number VARCHAR(10) NOT NULL,
-    status ENUM('PENDING', 'COOKING', 'READY', 'PAID', 'CANCELLED') DEFAULT 'PENDING',
+    status ENUM('PENDING', 'COOKING', 'READY', 'UNPAID', 'PAID', 'CANCELLED') DEFAULT 'PENDING',
     total DECIMAL(10, 2) NOT NULL,
     items TEXT,
     waiter_id INT, -- The staff member who placed the order
@@ -78,6 +78,8 @@ CREATE TABLE `order_items` (
   `order_id` int(11) NOT NULL,
   `menu_id` int(11) NOT NULL,
   `quantity` int(11) NOT NULL,
+    `status` enum('PENDING','READY','SERVED') NOT NULL DEFAULT 'PENDING',
+    `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   FOREIGN KEY (`order_id`) REFERENCES `orders`(`id`) ON DELETE CASCADE,

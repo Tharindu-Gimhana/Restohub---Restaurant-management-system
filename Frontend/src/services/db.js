@@ -115,8 +115,22 @@ export const db = {
             headers: getHeaders(),
             body: JSON.stringify({ status }),
         });
-        if (!response.ok) throw new Error('Failed to update status');
-        return await response.json();
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || 'Failed to update status');
+        return data;
+    },
+
+    updateOrderItemStatus: async (orderId, itemIds, status) => {
+        const response = await fetch(`${BASE_URL}/orders/${orderId}/items/status`, {
+            method: 'PATCH',
+            headers: getHeaders(),
+            body: JSON.stringify({ itemIds, status }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Failed to update order items');
+        return data;
     },
 
     // --- REPORTING (Calculated on Client for now) ---

@@ -1,38 +1,61 @@
-import React from 'react';
-import { CheckCircle, Clock, ChefHat, AlertCircle } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { CheckCircle, Clock, ChefHat, Circle, SquareCheckBig } from 'lucide-react';
+import { db } from '../services/db';
 
-const KitchenOrderCard = ({ order, onUpdateStatus }) => {
+const KitchenOrderCard = ({ order, onRefresh }) => {
+  const [selectedItemIds, setSelectedItemIds] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setSelectedItemIds([]);
+  }, [order.id, order.items]);
+
   // 1. Safety Check
   const items = order.items || [];
   if (items.length === 0) return null;
 
-  // 2. Safely parse and sort timestamps
-  const sortedItems = [...items].sort((a, b) => {
-    const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-    const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-    return timeA - timeB;
-  });
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => {
+      const statusWeight = { PENDING: 0, READY: 1, SERVED: 2 };
+      const statusDiff = (statusWeight[a.status] ?? 99) - (statusWeight[b.status] ?? 99);
+      if (statusDiff !== 0) return statusDiff;
 
-  // Base time is the timestamp of the OLDEST item
-  const baseTime = sortedItems[0]?.created_at ? new Date(sortedItems[0].created_at).getTime() : 0;
+      const timeA = a.updated_at ? new Date(a.updated_at).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+      const timeB = b.updated_at ? new Date(b.updated_at).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+      return timeA - timeB;
+    });
+  }, [items]);
 
-  // 3. Bulletproof "Is New" Helper
-  const isNewItem = (itemCreatedAt, itemName) => {
-    if (!itemCreatedAt || baseTime === 0) return false; // Fail gracefully if no timestamp
-    
-    const itemTime = new Date(itemCreatedAt).getTime();
-    const diffSeconds = (itemTime - baseTime) / 1000;
-    
-    // --- DEBUGGING LOG (Check your F12 Console!) ---
-    // console.log(`[Item: ${itemName}] Diff from start: ${diffSeconds} seconds`);
+  const readyItems = sortedItems.filter(item => item.status === 'READY');
 
-    // Threshold: Anything added > 60 seconds (1 minute) after the first item is "NEW"
-    return diffSeconds > 60; 
+  const toggleItem = (itemId) => {
+    setSelectedItemIds(prev => (
+      prev.includes(itemId)
+        ? prev.filter(id => id !== itemId)
+        : [...prev, itemId]
+    ));
+  };
+
+  const submitReadyItems = async () => {
+    if (selectedItemIds.length === 0) return;
+
+    try {
+      setSubmitting(true);
+      await db.updateOrderItemStatus(order.id, selectedItemIds, 'READY');
+      setSelectedItemIds([]);
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      alert(error.message || 'Failed to update selected items');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // 4. Status Helpers
   const isCooking = order.status === 'COOKING';
   const isReady = order.status === 'READY';
+
+  const pendingCount = sortedItems.filter(item => item.status === 'PENDING').length;
 
   return (
     <div className={`flex flex-col h-full bg-white rounded-xl shadow-sm border-2 transition-all ${
@@ -64,32 +87,64 @@ const KitchenOrderCard = ({ order, onUpdateStatus }) => {
       {/* --- ITEMS LIST --- */}
       <div className="flex-1 p-0 overflow-hidden">
         {sortedItems.map((item, idx) => {
-          // Pass the name too, just for our debug log
-          const isNew = isNewItem(item.created_at, item.name);
+         const isReadyItem = item.status === 'READY';
+         const isServedItem = item.status === 'SERVED';
+         const isSelected = selectedItemIds.includes(item.id);
+         const isSelectable = item.status === 'PENDING';
 
           return (
             <div 
-              key={idx} 
-              className={`flex justify-between items-center p-3 border-b border-dashed border-slate-100 transition-colors ${
-                 isNew ? 'bg-yellow-50 border-l-4 border-l-yellow-400' : 'bg-white'
+              key={item.id} 
+            className={`flex justify-between items-center p-3 border-b border-dashed border-slate-100 transition-colors ${
+              isServedItem ? 'bg-emerald-50' : isReadyItem ? 'bg-emerald-100 border-l-4 border-l-emerald-500' : isSelected ? 'bg-amber-50 border-l-4 border-l-amber-400' : 'bg-slate-50'
               }`}
             >
               <div className="flex items-center gap-3">
-                <span className={`font-bold text-sm px-2 py-1 rounded ${
-                   isNew ? 'bg-yellow-200 text-yellow-800' : 'bg-slate-100 text-slate-700'
-                }`}>
-                   {item.quantity}x
-                </span>
+             {isSelectable ? (
+               <button
+                type="button"
+                onClick={() => toggleItem(item.id)}
+                className={`w-5 h-5 flex items-center justify-center rounded-full transition-colors ${
+                  isSelected ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-400'
+                } cursor-pointer`}
+               >
+                {isSelected ? <CheckCircle size={14} /> : <Circle size={14} />}
+               </button>
+             ) : (
+               <div className={`w-5 h-5 flex items-center justify-center rounded-full ${
+                 isServedItem ? 'bg-emerald-600 text-white' : 'bg-emerald-500 text-white'
+               }`}>
+                 {isServedItem || isReadyItem ? <CheckCircle size={14} /> : <Circle size={14} />}
+               </div>
+             )}
+
+             <span className={`font-bold text-sm px-2 py-1 rounded ${
+               isServedItem ? 'bg-emerald-200 text-emerald-800' : isReadyItem ? 'bg-emerald-200 text-emerald-800' : isSelected ? 'bg-amber-200 text-amber-800' : 'bg-slate-200 text-slate-600'
+             }`}>
+               {item.quantity}x
+             </span>
 
                 <div className="flex flex-col">
-                   <span className={`text-sm ${isNew ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
+               <span className={`text-sm ${isReadyItem || isServedItem ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
                       {item.name}
                    </span>
-                   {isNew && (
-                      <span className="text-[10px] font-bold text-orange-600 flex items-center gap-1 animate-pulse mt-0.5">
-                         <AlertCircle size={10} /> LATE ADDITION
-                      </span>
-                   )}
+               {isServedItem ? (
+                 <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 mt-0.5">
+                   <SquareCheckBig size={10} /> SERVED
+                 </span>
+               ) : isReadyItem ? (
+                 <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 mt-0.5">
+                   <CheckCircle size={10} /> READY
+                 </span>
+               ) : isSelected ? (
+                 <span className="text-[10px] font-bold text-amber-700 flex items-center gap-1 mt-0.5">
+                   <Clock size={10} /> SELECTED
+                 </span>
+               ) : (
+                 <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1 mt-0.5">
+                   <Clock size={10} /> WAITING
+                 </span>
+               )}
                 </div>
               </div>
             </div>
@@ -99,22 +154,19 @@ const KitchenOrderCard = ({ order, onUpdateStatus }) => {
 
       {/* --- ACTION FOOTER --- */}
       <div className="p-4 mt-auto border-t bg-slate-50">
-        {order.status === 'PENDING' && (
-           <button 
-             onClick={() => onUpdateStatus(order.id, 'COOKING')}
-             className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-bold flex justify-center items-center gap-2 transition-all shadow-md active:scale-95"
-           >
-             <ChefHat size={18} /> Start Cooking
-           </button>
-        )}
+        <div className="flex items-center justify-between mb-3 text-xs text-slate-500">
+         <span>{pendingCount} pending item{pendingCount === 1 ? '' : 's'}</span>
+         <span>{readyItems.length} ready</span>
+        </div>
 
-        {order.status === 'COOKING' && (
-           <button 
-             onClick={() => onUpdateStatus(order.id, 'READY')}
-             className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold flex justify-center items-center gap-2 transition-all shadow-md active:scale-95"
-           >
-             <CheckCircle size={18} /> Mark Ready
-           </button>
+        {selectedItemIds.length > 0 && (
+          <button 
+           onClick={submitReadyItems}
+           disabled={submitting}
+           className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-lg font-bold flex justify-center items-center gap-2 transition-all shadow-md active:scale-95"
+          >
+           <CheckCircle size={18} /> {submitting ? 'Submitting...' : 'Submit Selected Items'}
+          </button>
         )}
       </div>
 
